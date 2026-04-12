@@ -18,9 +18,8 @@ jobs:
       - name: Configure and Build
         run: |
           cd ffmpeg-src
-          
-          # Самое важное: указываем путь к SDK, чтобы компилятор не терялся
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
+          BP=$(brew --prefix)
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -31,10 +30,14 @@ jobs:
             --arch=x86_64 \
             --target-os=darwin \
             --enable-cross-compile \
-            --cc="clang -arch x86_64" \
-            --extra-cflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13" \
-            --extra-ldflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13" \
-            --disable-debug
+            --cc='clang -arch x86_64' \
+            --extra-cflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13 -I$BP/include -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13 -L$BP/lib -L$GITHUB_WORKSPACE/libs/lib" \
+            --disable-debug \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libsvtav1 \
+            --disable-pkg-config
           
           make -j$(sysctl -n hw.ncpu)
           make install

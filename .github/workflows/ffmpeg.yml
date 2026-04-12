@@ -10,7 +10,8 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Base Tools
-        run: brew install nasm cmake
+        # Добавляем всё необходимое для сборки из исходников
+        run: brew install nasm cmake automake autoconf libtool
 
       - name: Build Libraries Statically (Intel)
         run: |
@@ -19,11 +20,13 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/libs"
           mkdir -p $PREFIX
 
-          # 1. FDK-AAC
+          # 1. FDK-AAC (теперь заведется)
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git
-          cd fdk-aac && ./autogen.sh
+          cd fdk-aac 
+          ./autogen.sh
           ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS" CXXFLAGS="$FLAGS"
-          make -j4 install && cd ..
+          make -j4 install
+          cd ..
 
           # 2. LAME (MP3)
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz

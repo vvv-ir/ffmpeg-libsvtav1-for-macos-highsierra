@@ -1,12 +1,43 @@
-- name: Configure and Build FFmpeg
+name: Build Static FFmpeg + SVT-AV1 (Total Control)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.13"
+    steps:
+      - name: Install Build Tools
+        run: brew install automake cmake git libtool x264 x265 nasm pkg-config
+
+      - name: Build SVT-AV1 Statically
+        run: |
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
+          mkdir -p svt-src/Build
+          cd svt-src/Build
+          cmake .. -G"Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/libs
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: Clone FFmpeg
+        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+
+      - name: Configure and Build FFmpeg
         run: |
           cd ffmpeg-src
           BP=$(brew --prefix)
           
-          # СОЗДАЕМ ФЕЙКОВЫЙ PKG_CONFIG_PATH, чтобы он вел в нашу папку
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig"
+          # Указываем FFmpeg параметры SVT-AV1 вручную, чтобы он не запускал pkg-config
+          export SVT_AV1_CFLAGS="-I$GITHUB_WORKSPACE/libs/include"
+          export SVT_AV1_LIBS="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc"
           
-          # ЯВНО ГОВОРИМ ГДЕ ИСКАТЬ ПРОВЕРКУ
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -19,10 +50,15 @@
             --enable-libsvtav1 \
             --arch=x86_64 \
             --target-os=darwin \
-            --pkg-config="pkg-config --static" \
             --extra-cflags="-I$GITHUB_WORKSPACE/libs/include -I$BP/include -mmacosx-version-min=10.13 -arch x86_64" \
             --extra-ldflags="-L$GITHUB_WORKSPACE/libs/lib -L$BP/lib -mmacosx-version-min=10.13 -arch x86_64" \
             --extra-libs="-lpthread -lm"
           
           make -j$(sysctl -n hw.ncpu)
           make install
+
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-svtav1-final
+          path: dist/bin/ffmpeg

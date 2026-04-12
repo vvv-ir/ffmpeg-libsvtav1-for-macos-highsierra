@@ -1,4 +1,4 @@
-name: Build Static FFmpeg (Survival Mode)
+name: Build Static FFmpeg (Cross-Compile Fix)
 
 on:
   workflow_dispatch:
@@ -9,48 +9,32 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
-      - name: Install Build Tools
-        run: brew install automake cmake git libtool nasm x264 x265
-
-      - name: Build SVT-AV1 Statically
-        run: |
-          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
-          mkdir -p svt-src/Build
-          cd svt-src/Build
-          cmake .. -G"Unix Makefiles" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/libs
-          make -j$(sysctl -n hw.ncpu)
-          make install
+      - name: Install Tools
+        run: brew install nasm x264 x265
 
       - name: Clone FFmpeg
         run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
-      - name: Configure and Build FFmpeg
+      - name: Configure and Build
         run: |
           cd ffmpeg-src
           
-          # Узнаем, где на самом деле лежат x264 и x265
-          X264_PATH=$(brew --prefix x264)
-          X265_PATH=$(brew --prefix x265)
+          # Самое важное: указываем путь к SDK, чтобы компилятор не терялся
+          SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # РУЧНОЙ ВВОД: Мы НЕ используем --enable-lib... который дергает pkg-config
-          # Мы вбиваем всё через extra-cflags и extra-ldflags
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
             --disable-shared \
             --enable-gpl \
             --enable-nonfree \
-            --disable-debug \
             --arch=x86_64 \
             --target-os=darwin \
-            --extra-cflags="-I$GITHUB_WORKSPACE/libs/include -I$X264_PATH/include -I$X265_PATH/include -arch x86_64 -mmacosx-version-min=10.13" \
-            --extra-ldflags="-L$GITHUB_WORKSPACE/libs/lib -L$X264_PATH/lib -L$X265_PATH/lib -arch x86_64 -mmacosx-version-min=10.13" \
-            --extra-libs="-lsvtav1 -lx264 -lx265 -lpthread -lm -ldl"
+            --enable-cross-compile \
+            --cc="clang -arch x86_64" \
+            --extra-cflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13" \
+            --extra-ldflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13" \
+            --disable-debug
           
           make -j$(sysctl -n hw.ncpu)
           make install
@@ -58,5 +42,5 @@ jobs:
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-custom-intel
+          name: ffmpeg-intel-fixed
           path: dist/bin/ffmpeg

@@ -1,79 +1,92 @@
-name: FFmpeg High Sierra Final Boss
+name: FFmpeg High Sierra (Ubuntu Osxcross)
 on: [push, workflow_dispatch]
 
 jobs:
-  build-ffmpeg:
-    runs-on: macos-15
+  build:
+    runs-on: ubuntu-latest
+    env:
+      OSXCROSS_VERSION: "master"
+      SDK_VERSION: "10.13"
+      MACOS_MIN_VER: "10.13"
+      INSTALL_DIR: "/home/runner/work/dist"
+      # Определяем префикс компилятора для Osxcross
+      CC_PREFIX: "x86_64-apple-darwin17-"
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout FFmpeg
         uses: actions/checkout@v4
 
-      - name: Install Build Tools
+      - name: Install Build Tools (Linux)
         run: |
-          brew install nasm automake libtool cmake pkg-config
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
+            bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
+            cmake nasm pkg-config
 
-      - name: Set Environment Variables
+      - name: Setup Osxcross
         run: |
-          echo "INSTALL_DIR=${{ github.workspace }}/libs" >> $GITHUB_ENV
-          # Жестко задаем таргет x86_64 для High Sierra
-          echo "TARGET_FLAGS=-arch x86_64 -target x86_64-apple-macos10.13 -mmacosx-version-min=10.13" >> $GITHUB_ENV
-          echo "SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          git clone https://github.com/tpoechtrager/osxcross.git /home/runner/osxcross
+          cd /home/runner/osxcross
+          # Загружаем SDK 10.13 (используем проверенный репозиторий)
+          curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz -o tarballs/MacOSX10.13.sdk.tar.xz
+          # Сборка тулчейна (это быстро, так как мы используем системный clang)
+          UNATTENDED=1 ./build.sh
+          # Добавляем в PATH
+          echo "/home/runner/osxcross/target/bin" >> $GITHUB_PATH
 
-      - name: Build Dependencies
+      - name: Build Dependencies (Static)
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
-          
+          export PATH="/home/runner/osxcross/target/bin:$PATH"
+          export CC="${{ env.CC_PREFIX }}clang"
+          export CXX="${{ env.CC_PREFIX }}clang++"
+          export AR="${{ env.CC_PREFIX }}ar"
+          export RANLIB="${{ env.CC_PREFIX }}ranlib"
+          export CFLAGS="-O3 -mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
+
           # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
-            CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
-          make -j$(sysctl -n hw.ncpu) install && cd ..
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
+          make -j$(nproc) install && cd ..
 
           # 2. LAME
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
-            CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
-          make -j$(sysctl -n hw.ncpu) install && cd ..
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
+          make -j$(nproc) install && cd ..
 
           # 3. OPUS
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
-          ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
-            CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
-          make -j$(sysctl -n hw.ncpu) install
-          ranlib ${{ env.INSTALL_DIR }}/lib/libopus.a
-          cd ..
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
+          make -j$(nproc) install && cd ..
 
-          # 4. SVT-AV1
+          # 4. SVT-AV1 (Используем тулчейн-файл Osxcross для CMake)
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
-          cd SVT-AV1 && rm -rf build && mkdir build
-          cmake -S . -B build -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
-            -DBUILD_SHARED_LIBS=OFF -DENABLE_AVX512=ON -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(sysctl -n hw.ncpu) --target install && cd ..
+          cd SVT-AV1 && mkdir build && cd build
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=/home/runner/osxcross/target/toolchain.cmake \
+            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_AVX512=ON
+          make -j$(nproc) install && cd ../..
 
       - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # Объявляем переменные для FFmpeg, чтобы он не искал их через pkg-config
-          export CFLAGS="${{ env.TARGET_FLAGS }} -I${{ env.INSTALL_DIR }}/include -isysroot ${{ env.SDK_PATH }}"
-          export LDFLAGS="${{ env.TARGET_FLAGS }} -L${{ env.INSTALL_DIR }}/lib -isysroot ${{ env.SDK_PATH }} -Wl,-platform_version,macos,10.13,10.13"
-          
-          # Явное указание путей для fdk-aac, если pkg-config подведет
-          export FDK_AAC_CFLAGS="-I${{ env.INSTALL_DIR }}/include"
-          export FDK_AAC_LIBS="-L${{ env.INSTALL_DIR }}/lib -lfdk-aac"
+          export PATH="/home/runner/osxcross/target/bin:$PATH"
+          export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
 
           ./configure \
-            --prefix="${{ github.workspace }}/dist" \
-            --cc="clang" \
+            --prefix="${{ github.workspace }}/dist_ffmpeg" \
+            --enable-cross-compile \
+            --cross-prefix=${{ env.CC_PREFIX }} \
             --target-os=darwin \
             --arch=x86_64 \
-            --enable-cross-compile \
+            --cc=${{ env.CC_PREFIX }}clang \
+            --pkg-config=pkg-config \
             --enable-static \
             --disable-shared \
             --enable-gpl \
@@ -82,18 +95,16 @@ jobs:
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libsvtav1 \
-            --extra-cflags="$CFLAGS" \
-            --extra-ldflags="$LDFLAGS" \
-            --extra-libs="-lpthread -lm -lz -ldl" \
-            --pkg-config-flags="--static" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
             --disable-debug \
-            --disable-doc || (cat ffbuild/config.log && exit 1)
+            --disable-doc
 
-          make -j$(sysctl -n hw.ncpu)
+          make -j$(nproc)
           make install
 
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra
-          path: dist/bin/ffmpeg
+          name: ffmpeg-osxcross-10.13
+          path: dist_ffmpeg/bin/ffmpeg

@@ -48,9 +48,14 @@ jobs:
 
       - name: Clone and Build FFmpeg
         run: |
-          cd ffmpeg-src || git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          # Если папки нет - клонируем, если есть - идем дальше
+          [ -d ffmpeg-src ] || git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
+          
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
+          
+          # Указываем FFmpeg, где лежать "паспорта" наших собранных библиотек
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig"
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -62,7 +67,6 @@ jobs:
             --target-os=darwin \
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
-            --pkg-config="/usr/bin/true" \
             --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
             --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib" \
             --disable-debug \

@@ -1,4 +1,4 @@
-name: Build Static FFmpeg (Cross-Compile Fix)
+name: Build Full Static FFmpeg (Total Independence)
 
 on:
   workflow_dispatch:
@@ -9,24 +9,45 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
-      - name: Install Tools
-        run: brew install nasm x264 x265
+      - name: Install Base Tools
+        run: brew install nasm cmake
 
-      - name: Clone FFmpeg
-        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
-
-      - name: Configure and Build (The Ultimate Edition)
+      - name: Build Libraries Statically (Intel)
         run: |
+          SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
+          FLAGS="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH"
+          PREFIX="$GITHUB_WORKSPACE/libs"
+          mkdir -p $PREFIX
+
+          # 1. FDK-AAC
+          git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git
+          cd fdk-aac && ./autogen.sh
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS" CXXFLAGS="$FLAGS"
+          make -j4 install && cd ..
+
+          # 2. LAME (MP3)
+          curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
+          cd lame-3.100
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS"
+          make -j4 install && cd ..
+
+          # 3. OPUS
+          git clone --depth 1 https://github.com/xiph/opus.git
+          cd opus && ./autogen.sh
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS"
+          make -j4 install && cd ..
+
+          # 4. SVT-AV1 (уже проверенный)
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
+          cd svt-src/Build
+          cmake .. -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_INSTALL_PREFIX=$PREFIX
+          make -j4 install && cd ../..
+
+      - name: Clone and Build FFmpeg
+        run: |
+          cd ffmpeg-src || git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
-          
-          # Находим пути к каждой библиотеке через brew
-          FDK_PATH=$(brew --prefix fdk-aac)
-          LAME_PATH=$(brew --prefix lame)
-          OPUS_PATH=$(brew --prefix opus)
-          VPX_PATH=$(brew --prefix libvpx)
-          X264_PATH=$(brew --prefix x264)
-          X265_PATH=$(brew --prefix x265)
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -39,22 +60,13 @@ jobs:
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
             --pkg-config="/usr/bin/true" \
-            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH \
-                            -I$GITHUB_WORKSPACE/libs/include \
-                            -I$FDK_PATH/include -I$LAME_PATH/include -I$OPUS_PATH/include \
-                            -I$VPX_PATH/include -I$X264_PATH/include -I$X265_PATH/include" \
-            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH \
-                             -L$GITHUB_WORKSPACE/libs/lib \
-                             -L$FDK_PATH/lib -L$LAME_PATH/lib -L$OPUS_PATH/lib \
-                             -L$VPX_PATH/lib -L$X264_PATH/lib -L$X265_PATH/lib" \
+            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib" \
             --disable-debug \
-            --enable-libx264 \
-            --enable-libx265 \
-            --enable-libsvtav1 \
             --enable-libfdk-aac \
             --enable-libmp3lame \
             --enable-libopus \
-            --enable-libvpx \
+            --enable-libsvtav1 \
             --extra-libs="-lpthread -lm -ldl -lz"
           
           make -j$(sysctl -n hw.ncpu)
@@ -63,5 +75,5 @@ jobs:
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-intel-fixed
+          name: ffmpeg-highsierra-ultimate
           path: dist/bin/ffmpeg

@@ -1,4 +1,4 @@
-name: Build Static FFmpeg + SVT-AV1 (Fast & Clean)
+name: Build Static FFmpeg + SVT-AV1 (Final Fix)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Build Tools
-        run: brew install automake cmake git lame libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+        run: brew install automake cmake git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
 
       - name: Build SVT-AV1 Statically
         run: |
@@ -32,8 +32,14 @@ jobs:
       - name: Configure and Build FFmpeg
         run: |
           cd ffmpeg-src
+          
+          # Определяем пути Homebrew (для Sequoia это /opt/homebrew)
           BREW_PREFIX=$(brew --prefix)
+          
+          # Настраиваем переменные окружения для поиска библиотек
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/libs/lib -L$BREW_PREFIX/lib -arch x86_64"
+          export CPPFLAGS="-I$GITHUB_WORKSPACE/libs/include -I$BREW_PREFIX/include"
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -51,8 +57,8 @@ jobs:
             --enable-libsvtav1 \
             --arch=x86_64 \
             --target-os=darwin \
-            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include -I$BREW_PREFIX/include" \
-            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L$BREW_PREFIX/lib"
+            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 $CPPFLAGS" \
+            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 $LDFLAGS"
           
           make -j$(sysctl -n hw.ncpu)
           make install

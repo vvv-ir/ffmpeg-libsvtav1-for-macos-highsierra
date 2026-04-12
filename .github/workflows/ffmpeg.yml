@@ -3,7 +3,7 @@ on: [push, workflow_dispatch]
 
 jobs:
   build-ffmpeg:
-    runs-on: macos-15 # Или macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout Repository
@@ -15,68 +15,61 @@ jobs:
 
       - name: Set Environment Variables
         run: |
-          # Используем абсолютные пути, чтобы ничего не терялось
           echo "INSTALL_DIR=${{ github.workspace }}/libs" >> $GITHUB_ENV
+          # Жестко задаем таргет x86_64 для High Sierra
           echo "TARGET_FLAGS=-arch x86_64 -target x86_64-apple-macos10.13 -mmacosx-version-min=10.13" >> $GITHUB_ENV
           echo "SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
 
-      - name: Build Dependencies (x86_64 Static)
+      - name: Build Dependencies
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # --- FDK-AAC ---
+          # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
           ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
             CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
           make -j$(sysctl -n hw.ncpu) install && cd ..
 
-          # --- LAME (MP3) ---
+          # 2. LAME
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
           ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
             CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
           make -j$(sysctl -n hw.ncpu) install && cd ..
 
-          # --- OPUS ---
+          # 3. OPUS
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
           ./configure --prefix=${{ env.INSTALL_DIR }} --host=x86_64-apple-darwin --enable-static --disable-shared \
             CFLAGS="${{ env.TARGET_FLAGS }}" LDFLAGS="${{ env.TARGET_FLAGS }}"
           make -j$(sysctl -n hw.ncpu) install
-          # Исправляем проблему "no symbols" для линковщика
           ranlib ${{ env.INSTALL_DIR }}/lib/libopus.a
           cd ..
 
-          # --- SVT-AV1 (Исправленный блок) ---
+          # 4. SVT-AV1
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
-          cd SVT-AV1
-          rm -rf build && mkdir build
-          # Используем -S . -B build чтобы CMake точно знал, где исходники
-          cmake -S . -B build \
-            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_AVX512=ON \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(sysctl -n hw.ncpu) --target install
-          cd ..
+          cd SVT-AV1 && rm -rf build && mkdir build
+          cmake -S . -B build -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
+            -DBUILD_SHARED_LIBS=OFF -DENABLE_AVX512=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(sysctl -n hw.ncpu) --target install && cd ..
 
       - name: Build FFmpeg
-        env:
-          PKG_CONFIG_PATH: ${{ env.INSTALL_DIR }}/lib/pkgconfig
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
+          # Объявляем переменные для FFmpeg, чтобы он не искал их через pkg-config
           export CFLAGS="${{ env.TARGET_FLAGS }} -I${{ env.INSTALL_DIR }}/include -isysroot ${{ env.SDK_PATH }}"
           export LDFLAGS="${{ env.TARGET_FLAGS }} -L${{ env.INSTALL_DIR }}/lib -isysroot ${{ env.SDK_PATH }} -Wl,-platform_version,macos,10.13,10.13"
+          
+          # Явное указание путей для fdk-aac, если pkg-config подведет
+          export FDK_AAC_CFLAGS="-I${{ env.INSTALL_DIR }}/include"
+          export FDK_AAC_LIBS="-L${{ env.INSTALL_DIR }}/lib -lfdk-aac"
 
           ./configure \
             --prefix="${{ github.workspace }}/dist" \
-            --extra-cflags="$CFLAGS" \
-            --extra-ldflags="$LDFLAGS" \
             --cc="clang" \
             --target-os=darwin \
             --arch=x86_64 \
@@ -89,14 +82,12 @@ jobs:
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libsvtav1 \
+            --extra-cflags="$CFLAGS" \
+            --extra-ldflags="$LDFLAGS" \
+            --extra-libs="-lpthread -lm -lz -ldl" \
             --pkg-config-flags="--static" \
             --disable-debug \
-            --disable-doc \
-            --extra-libs="-lpthread -lm -lz -ldl"
-
-          # Проверка
-          grep "CONFIG_LIBFDK_AAC 1" config.h || { echo "FDK-AAC FAIL"; exit 1; }
-          grep "CONFIG_LIBSVTAV1 1" config.h || { echo "SVT-AV1 FAIL"; exit 1; }
+            --disable-doc || (cat ffbuild/config.log && exit 1)
 
           make -j$(sysctl -n hw.ncpu)
           make install

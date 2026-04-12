@@ -16,44 +16,51 @@ jobs:
       - name: Build Libraries Statically (Intel)
         run: |
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
-          FLAGS="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH"
+          # Ключевой момент: заставляем компилятор работать только в x86_64
+          export CFLAGS="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH"
+          export CXXFLAGS="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH"
+          export LDFLAGS="-arch x86_64 -target x86_64-apple-macos10.13"
+          
           PREFIX="$GITHUB_WORKSPACE/libs"
           mkdir -p $PREFIX
 
-          # 1. FDK-AAC (теперь заведется)
+          # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git
-          cd fdk-aac 
-          ./autogen.sh
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS" CXXFLAGS="$FLAGS"
-          make -j4 install
-          cd ..
+          cd fdk-aac && ./autogen.sh
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
+          make -j4 install && cd ..
 
-          # 2. LAME (MP3)
+          # 2. LAME
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS"
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
           make -j4 install && cd ..
 
           # 3. OPUS
           git clone --depth 1 https://github.com/xiph/opus.git
           cd opus && ./autogen.sh
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin CFLAGS="$FLAGS"
+          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
           make -j4 install && cd ..
 
-          # 4. SVT-AV1 (уже проверенный)
+          # 4. SVT-AV1 (тут CMake, у него свои правила)
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
           cd svt-src/Build
-          cmake .. -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_INSTALL_PREFIX=$PREFIX
+          cmake .. -G"Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13" \
+            -DCMAKE_C_FLAGS="$CFLAGS" \
+            -DCMAKE_INSTALL_PREFIX=$PREFIX
           make -j4 install && cd ../..
 
       - name: Clone and Build FFmpeg
         run: |
-          [ -d ffmpeg-src ] || git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          # Используем официальное зеркало на GitHub вместо git.ffmpeg.org
+          [ -d ffmpeg-src ] || git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # Мы убираем ВСЕ --enable-lib... которые используют pkg-config.
-          # Вместо этого мы принудительно подключаем их через extra-cflags и extra-libs.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \

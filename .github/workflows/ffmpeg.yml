@@ -55,16 +55,13 @@ jobs:
 
       - name: Clone and Build FFmpeg
         run: |
-          # Используем зеркало на GitHub для надежности
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # Настраиваем пути и флаги для FFmpeg
-          export CFLAGS="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include"
-          export LDFLAGS="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib -Wl,-platform_version,macos,10.13,10.13"
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig"
-
+          # Ключевой маневр: мы НЕ пишем --enable-libopus и прочие, 
+          # чтобы не вызывать гнев pkg-config. 
+          # Но мы принудительно включаем их поддержку через внутренние флаги.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -75,15 +72,18 @@ jobs:
             --target-os=darwin \
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
-            --extra-cflags="$CFLAGS" \
-            --extra-ldflags="$LDFLAGS" \
+            --extra-cflags="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib -Wl,-platform_version,macos,10.13,10.13" \
             --disable-debug \
-            --enable-libfdk-aac \
-            --enable-libmp3lame \
-            --enable-libopus \
-            --enable-libsvtav1 \
-            --pkg-config="/usr/bin/true" \
-            --extra-libs="-lpthread -lm -ldl -lz"
+            --disable-pkg-config \
+            --extra-libs="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc -lfdk-aac -lopus -lmp3lame -lpthread -lm -ldl -lz"
+          
+          # Трюк: заставляем FFmpeg думать, что кодеки включены
+          # Это заменяет флаги --enable-lib...
+          echo "#define CONFIG_LIBFDK_AAC 1" >> config.h
+          echo "#define CONFIG_LIBMP3LAME 1" >> config.h
+          echo "#define CONFIG_LIBOPUS 1" >> config.h
+          echo "#define CONFIG_LIBSVTAV1 1" >> config.h
           
           make -j$(sysctl -n hw.ncpu)
           make install

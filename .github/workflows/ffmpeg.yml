@@ -56,11 +56,12 @@ jobs:
 
       - name: Clone and Build FFmpeg
         run: |
-          # Используем официальное зеркало на GitHub вместо git.ffmpeg.org
           [ -d ffmpeg-src ] || git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
+          # Мы ПРИНУДИТЕЛЬНО включаем библиотеки, игнорируя pkg-config
+          # и указывая пути к ним напрямую через --extra-cflags/ldflags
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -71,10 +72,15 @@ jobs:
             --target-os=darwin \
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
-            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
-            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib" \
+            --extra-cflags="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib" \
             --disable-debug \
-            --extra-libs="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc -lfdk-aac -lopus -lmp3lame -lpthread -lm -ldl -lz"
+            --enable-libfdk-aac \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libsvtav1 \
+            --pkg-config="/usr/bin/true" \
+            --extra-libs="-lpthread -lm -ldl -lz"
           
           make -j$(sysctl -n hw.ncpu)
           make install

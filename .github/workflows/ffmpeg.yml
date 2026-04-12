@@ -34,7 +34,7 @@ jobs:
           cd ffmpeg-src
           BP=$(brew --prefix)
           
-          # Мы ВРУЧНУЮ прописываем флаги для SVT-AV1, игнорируя pkg-config
+          # Явно прописываем флаги для SVT-AV1, чтобы FFmpeg их "съел" принудительно
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -49,8 +49,7 @@ jobs:
             --target-os=darwin \
             --extra-cflags="-I$GITHUB_WORKSPACE/libs/include -I$BP/include -mmacosx-version-min=10.13 -arch x86_64" \
             --extra-ldflags="-L$GITHUB_WORKSPACE/libs/lib -L$BP/lib -mmacosx-version-min=10.13 -arch x86_64" \
-            --extra-libs="-lpthread -lm" \
-            --disable-pkg-config 
+            --extra-libs="-lpthread -lm"
           
           make -j$(sysctl -n hw.ncpu)
           make install

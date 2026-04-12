@@ -15,12 +15,14 @@ jobs:
       - name: Clone FFmpeg
         run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
-      - name: Configure and Build
+      - name: Configure and Build (The Ultimate Edition)
         run: |
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           BP=$(brew --prefix)
           
+          # Мы подменяем pkg-config на 'true' (команда, которая всегда возвращает успех, но ничего не делает)
+          # Это заставит FFmpeg игнорировать системные проверки и брать наши пути.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -31,13 +33,18 @@ jobs:
             --target-os=darwin \
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
-            --extra-cflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13 -I$BP/include -I$GITHUB_WORKSPACE/libs/include" \
-            --extra-ldflags="-isysroot $SDK_PATH -mmacosx-version-min=10.13 -L$BP/lib -L$GITHUB_WORKSPACE/libs/lib" \
+            --pkg-config="/usr/bin/true" \
+            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$BP/include -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$BP/lib -L$GITHUB_WORKSPACE/libs/lib" \
             --disable-debug \
             --enable-libx264 \
             --enable-libx265 \
             --enable-libsvtav1 \
-            --disable-pkg-config
+            --enable-libfdk-aac \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libvpx \
+            --extra-libs="-lpthread -lm -ldl -lz"
           
           make -j$(sysctl -n hw.ncpu)
           make install

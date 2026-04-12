@@ -1,4 +1,4 @@
-name: Build Static FFmpeg + SVT-AV1 (Final Clean)
+name: Build Static FFmpeg + SVT-AV1 (Total Control)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Build Tools
-        run: brew install automake cmake git libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+        run: brew install automake cmake git libtool x264 x265 nasm pkg-config
 
       - name: Build SVT-AV1 Statically
         run: |
@@ -41,9 +41,6 @@ jobs:
             --enable-gpl \
             --enable-nonfree \
             --disable-debug \
-            --enable-libopus \
-            --enable-libvorbis \
-            --enable-libvpx \
             --enable-libx264 \
             --enable-libx265 \
             --enable-libsvtav1 \

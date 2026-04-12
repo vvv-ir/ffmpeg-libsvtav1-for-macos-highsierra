@@ -1,4 +1,4 @@
-name: Build Static FFmpeg + SVT-AV1 (Final Fix)
+name: Build Static FFmpeg + SVT-AV1 (Final Clean)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Build Tools
-        run: brew install automake cmake git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+        run: brew install automake cmake git libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
 
       - name: Build SVT-AV1 Statically
         run: |
@@ -32,8 +32,6 @@ jobs:
       - name: Configure and Build FFmpeg
         run: |
           cd ffmpeg-src
-          
-          # Определяем префикс Homebrew один раз
           BP=$(brew --prefix)
           
           ./configure \
@@ -43,7 +41,6 @@ jobs:
             --enable-gpl \
             --enable-nonfree \
             --disable-debug \
-            --enable-libmp3lame \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libvpx \
@@ -53,11 +50,8 @@ jobs:
             --arch=x86_64 \
             --target-os=darwin \
             --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include -I$BP/include" \
-            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L$BP/lib" \
-            --pkg-config-flags="--static" \
-            --extra-libs="-lpthread -lm"
+            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L$BP/lib"
           
-          # Если конфиг прошел, запускаем сборку
           make -j$(sysctl -n hw.ncpu)
           make install
 

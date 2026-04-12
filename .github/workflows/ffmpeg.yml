@@ -33,13 +33,8 @@ jobs:
         run: |
           cd ffmpeg-src
           
-          # Определяем пути Homebrew (для Sequoia это /opt/homebrew)
-          BREW_PREFIX=$(brew --prefix)
-          
-          # Настраиваем переменные окружения для поиска библиотек
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig"
-          export LDFLAGS="-L$GITHUB_WORKSPACE/libs/lib -L$BREW_PREFIX/lib -arch x86_64"
-          export CPPFLAGS="-I$GITHUB_WORKSPACE/libs/include -I$BREW_PREFIX/include"
+          # Определяем префикс Homebrew один раз
+          BP=$(brew --prefix)
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -57,9 +52,12 @@ jobs:
             --enable-libsvtav1 \
             --arch=x86_64 \
             --target-os=darwin \
-            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 $CPPFLAGS" \
-            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 $LDFLAGS"
+            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include -I$BP/include" \
+            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L$BP/lib" \
+            --pkg-config-flags="--static" \
+            --extra-libs="-lpthread -lm"
           
+          # Если конфиг прошел, запускаем сборку
           make -j$(sysctl -n hw.ncpu)
           make install
 

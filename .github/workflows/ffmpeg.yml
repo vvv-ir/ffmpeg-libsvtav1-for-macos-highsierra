@@ -60,8 +60,8 @@ jobs:
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # Мы ПРИНУДИТЕЛЬНО включаем библиотеки, игнорируя pkg-config
-          # и указывая пути к ним напрямую через --extra-cflags/ldflags
+          # ВНИМАНИЕ: Мы убрали все --enable-lib... 
+          # Мы просто скармливаем их через "заднюю дверь" (extra-libs)
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -75,12 +75,7 @@ jobs:
             --extra-cflags="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
             --extra-ldflags="-arch x86_64 -target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib" \
             --disable-debug \
-            --enable-libfdk-aac \
-            --enable-libmp3lame \
-            --enable-libopus \
-            --enable-libsvtav1 \
-            --pkg-config="/usr/bin/true" \
-            --extra-libs="-lpthread -lm -ldl -lz"
+            --extra-libs="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc -lfdk-aac -lopus -lmp3lame -lpthread -lm -ldl -lz"
           
           make -j$(sysctl -n hw.ncpu)
           make install

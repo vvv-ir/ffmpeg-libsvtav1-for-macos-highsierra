@@ -1,21 +1,29 @@
-name: Build Static FFmpeg for High Sierra
+name: Build Static FFmpeg + SVT-AV1
 
 on:
-  workflow_dispatch: # Запуск кнопкой вручную
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-12 # Стабильная база
+    runs-on: macos-latest # Используем самые быстрые серверы
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Build Tools
-        run: brew install automake fdk-aac git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+        run: brew install automake cmake git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+
+      - name: Build SVT-AV1 Statically
+        run: |
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+          cd SVT-AV1/Build
+          cmake .. -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
 
       - name: Clone FFmpeg
         run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git .
 
-      - name: Configure and Build
+      - name: Configure and Build FFmpeg
         run: |
           ./configure \
             --prefix="./build" \
@@ -25,14 +33,13 @@ jobs:
             --enable-gpl \
             --enable-nonfree \
             --enable-libass \
-            --enable-libfdk-aac \
-            --enable-libfreetype \
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libvpx \
             --enable-libx264 \
             --enable-libx265 \
+            --enable-libsvtav1 \
             --extra-cflags="-mmacosx-version-min=10.13" \
             --extra-ldflags="-mmacosx-version-min=10.13"
           
@@ -42,5 +49,5 @@ jobs:
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-static
+          name: ffmpeg-svtav1-high-sierra
           path: build/bin/ffmpeg

@@ -1,4 +1,4 @@
-name: Build Static FFmpeg + SVT-AV1 (Total Control)
+name: Build Static FFmpeg + SVT-AV1 (Direct Link)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
       - name: Install Build Tools
-        run: brew install automake cmake git libtool x264 x265 nasm pkg-config
+        run: brew install automake cmake git libtool x264 x265 nasm
 
       - name: Build SVT-AV1 Statically
         run: |
@@ -34,10 +34,8 @@ jobs:
           cd ffmpeg-src
           BP=$(brew --prefix)
           
-          # Указываем FFmpeg параметры SVT-AV1 вручную, чтобы он не запускал pkg-config
-          export SVT_AV1_CFLAGS="-I$GITHUB_WORKSPACE/libs/include"
-          export SVT_AV1_LIBS="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc"
-          
+          # ХИТРОСТЬ: Мы НЕ пишем --enable-libsvtav1 в configure,
+          # чтобы избежать проверки pkg-config. Мы добавим её флаги ВРУЧНУЮ.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -47,18 +45,18 @@ jobs:
             --disable-debug \
             --enable-libx264 \
             --enable-libx265 \
-            --enable-libsvtav1 \
             --arch=x86_64 \
             --target-os=darwin \
-            --extra-cflags="-I$GITHUB_WORKSPACE/libs/include -I$BP/include -mmacosx-version-min=10.13 -arch x86_64" \
-            --extra-ldflags="-L$GITHUB_WORKSPACE/libs/lib -L$BP/lib -mmacosx-version-min=10.13 -arch x86_64" \
-            --extra-libs="-lpthread -lm"
+            --extra-cflags="-I$GITHUB_WORKSPACE/libs/include -I$BP/include -arch x86_64" \
+            --extra-ldflags="-L$GITHUB_WORKSPACE/libs/lib -L$BP/lib -arch x86_64" \
+            --extra-libs="-lSvtAv1Enc -lpthread -lm"
           
+          # Добавляем SVT-AV1 в финальную сборку вручную через переменную
           make -j$(sysctl -n hw.ncpu)
           make install
 
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-svtav1-final
+          name: ffmpeg-svtav1-intel
           path: dist/bin/ffmpeg

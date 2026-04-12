@@ -1,7 +1,38 @@
-- name: Configure and Build FFmpeg
+name: Build Static FFmpeg + SVT-AV1 (Intel-Compatible)
+
+on:
+  workflow_dispatch: # Запуск вручную кнопкой в Actions
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.13"
+    steps:
+      - name: Install Build Tools
+        run: brew install automake cmake git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+
+      - name: Build SVT-AV1 Statically
+        run: |
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
+          mkdir -p svt-src/Build
+          cd svt-src/Build
+          cmake .. -G"Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/libs
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: Clone FFmpeg
+        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+
+      - name: Configure and Build FFmpeg
         run: |
           cd ffmpeg-src
-          # Добавляем пути к Homebrew (на Intel и ARM маках они разные, учитываем оба)
+          # Указываем пути к нашему SVT-AV1 и системным либам Homebrew
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig:/usr/local/lib/pkgconfig:/opt/homebrew/lib/pkgconfig"
           
           ./configure \
@@ -25,3 +56,9 @@
           
           make -j$(sysctl -n hw.ncpu)
           make install
+
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-intel-high-sierra
+          path: dist/bin/ffmpeg

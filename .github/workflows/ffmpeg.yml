@@ -1,19 +1,19 @@
-name: FFmpeg High Sierra (Ubuntu Osxcross)
+name: FFmpeg High Sierra (Ubuntu Osxcross Final)
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      OSXCROSS_VERSION: "master"
+      OSXCROSS_ROOT: /home/runner/osxcross
       SDK_VERSION: "10.13"
       MACOS_MIN_VER: "10.13"
-      INSTALL_DIR: "/home/runner/work/dist"
-      # Определяем префикс компилятора для Osxcross
-      CC_PREFIX: "x86_64-apple-darwin17-"
+      INSTALL_DIR: /home/runner/work/dist
+      # Префикс для инструментов кросс-компиляции
+      CC_PREFIX: x86_64-apple-darwin17-
 
     steps:
-      - name: Checkout FFmpeg
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Install Build Tools (Linux)
@@ -21,28 +21,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
             bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
-            cmake nasm pkg-config
+            cmake nasm pkg-config libxml2-dev
 
       - name: Setup Osxcross
         run: |
-          git clone https://github.com/tpoechtrager/osxcross.git /home/runner/osxcross
-          cd /home/runner/osxcross
-          # Загружаем SDK 10.13 (используем проверенный репозиторий)
+          git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
+          cd ${{ env.OSXCROSS_ROOT }}
+          
+          # Скачиваем SDK и кладем в tarballs с эталонным именем
+          mkdir -p tarballs
           curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz -o tarballs/MacOSX10.13.sdk.tar.xz
-          # Сборка тулчейна (это быстро, так как мы используем системный clang)
+          
+          # Запуск сборки в неинтерактивном режиме
           UNATTENDED=1 ./build.sh
-          # Добавляем в PATH
-          echo "/home/runner/osxcross/target/bin" >> $GITHUB_PATH
+          
+          # Добавляем бинарники в PATH для следующих шагов
+          echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
 
-      - name: Build Dependencies (Static)
+      - name: Build Dependencies (Static x86_64)
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
-          export PATH="/home/runner/osxcross/target/bin:$PATH"
+          # Принудительно задаем переменные окружения для кросс-компиляции
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           export CC="${{ env.CC_PREFIX }}clang"
           export CXX="${{ env.CC_PREFIX }}clang++"
           export AR="${{ env.CC_PREFIX }}ar"
           export RANLIB="${{ env.CC_PREFIX }}ranlib"
-          export CFLAGS="-O3 -mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
+          export CFLAGS="-O3 -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -I${{ env.INSTALL_DIR }}/include"
+          export LDFLAGS="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
 
           # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
@@ -62,22 +68,25 @@ jobs:
           ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j$(nproc) install && cd ..
 
-          # 4. SVT-AV1 (Используем тулчейн-файл Osxcross для CMake)
+          # 4. SVT-AV1 (Исправленный CMake с тулчейном)
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
-          cd SVT-AV1 && mkdir build && cd build
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=/home/runner/osxcross/target/toolchain.cmake \
+          cd SVT-AV1
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_AVX512=ON
-          make -j$(nproc) install && cd ../..
+          cmake --build build -j$(nproc) --target install && cd ..
 
       - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          export PATH="/home/runner/osxcross/target/bin:$PATH"
+          # Указываем FFmpeg, где лежат наши собранные библиотеки
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
 
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
@@ -103,8 +112,8 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name: Upload Result
+      - name: Upload FFmpeg Binary
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-osxcross-10.13
+          name: ffmpeg-high-sierra-osxcross
           path: dist_ffmpeg/bin/ffmpeg

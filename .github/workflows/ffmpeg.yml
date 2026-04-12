@@ -1,11 +1,11 @@
-name: Build Static FFmpeg + SVT-AV1
+name: Build Static FFmpeg + SVT-AV1 (Intel-Compatible)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest # Используем самые быстрые серверы
+    runs-on: macos-latest
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.13"
     steps:
@@ -14,19 +14,28 @@ jobs:
 
       - name: Build SVT-AV1 Statically
         run: |
-          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
-          cd SVT-AV1/Build
-          cmake .. -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
+          mkdir -p svt-src/Build
+          cd svt-src/Build
+          # Явно указываем архитектуру Intel (x86_64)
+          cmake .. -G"Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/libs
           make -j$(sysctl -n hw.ncpu)
-          sudo make install
+          make install
 
       - name: Clone FFmpeg
-        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git .
+        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
       - name: Configure and Build FFmpeg
         run: |
+          cd ffmpeg-src
+          export PKG_CONFIG_PATH=$GITHUB_WORKSPACE/libs/lib/pkgconfig
           ./configure \
-            --prefix="./build" \
+            --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-global \
             --enable-static \
             --disable-shared \
@@ -40,8 +49,10 @@ jobs:
             --enable-libx264 \
             --enable-libx265 \
             --enable-libsvtav1 \
-            --extra-cflags="-mmacosx-version-min=10.13" \
-            --extra-ldflags="-mmacosx-version-min=10.13"
+            --arch=x86_64 \
+            --target-os=darwin \
+            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include" \
+            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib"
           
           make -j$(sysctl -n hw.ncpu)
           make install
@@ -49,5 +60,5 @@ jobs:
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-svtav1-high-sierra
-          path: build/bin/ffmpeg
+          name: ffmpeg-intel-high-sierra
+          path: dist/bin/ffmpeg

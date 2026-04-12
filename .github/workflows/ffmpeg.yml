@@ -1,95 +1,74 @@
-name: Build FFmpeg Ultimate for High Sierra
-
-on:
-  workflow_dispatch:
+name: Build FFmpeg for High Sierra
+on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-14
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "10.13"
+    # Используем macOS 13 (Intel), чтобы избежать проблем с кросс-компиляцией ARM -> x86
+    runs-on: macos-13
+
     steps:
-      - name: Install Base Tools
-        run: brew install nasm cmake automake autoconf libtool
+      - name: Checkout FFmpeg
+        uses: actions/checkout@v4
+        with:
+          repository: FFmpeg/FFmpeg
+          path: ffmpeg-src
+          fetch-depth: 1
 
-      - name: Build Libraries Statically (Intel x86_64)
+      - name: Install Build Tools
         run: |
-          SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
-          # Жестко задаем архитектуру и таргет для всех библиотек
-          export CFLAGS="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH"
-          export CXXFLAGS="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH"
-          export LDFLAGS="-arch x86_64 -mmacosx-version-min=10.13 -Wl,-platform_version,macos,10.13,10.13"
-          
-          PREFIX="$GITHUB_WORKSPACE/libs"
-          mkdir -p $PREFIX
+          brew install pkg-config nasm automake libtool
 
-          # 1. FDK-AAC
-          git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git
-          cd fdk-aac && ./autogen.sh
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
-          make -j4 install && cd ..
+      # ПРИМЕЧАНИЕ: Здесь должен быть ваш шаг сборки библиотек (SVT-AV1, Opus и т.д.)
+      # Они должны оказаться в ${{ github.workspace }}/libs
+      # Если они уже собираются, вставьте тот код сюда.
 
-          # 2. LAME
-          curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
-          cd lame-3.100
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
-          make -j4 install && cd ..
-
-          # 3. OPUS
-          git clone --depth 1 https://github.com/xiph/opus.git
-          cd opus && ./autogen.sh
-          ./configure --prefix=$PREFIX --enable-static --disable-shared --host=x86_64-apple-darwin
-          make -j4 install && cd ..
-
-          # 4. SVT-AV1
-          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git svt-src
-          cd svt-src/Build
-          cmake .. -G"Unix Makefiles" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13" \
-            -DCMAKE_C_FLAGS="$CFLAGS" \
-            -DCMAKE_INSTALL_PREFIX=$PREFIX
-          make -j4 install && cd ../..
-
-      - name: Clone and Build FFmpeg
+      - name: Build FFmpeg for High Sierra
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/libs/lib/pkgconfig
         run: |
-          git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
+          
+          # Настройка путей и флагов
+          TARGET_FLAGS="-arch x86_64 -mmacosx-version-min=10.13"
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # Ключевой маневр: мы НЕ пишем --enable-libopus и прочие, 
-          # чтобы не вызывать гнев pkg-config. 
-          # Но мы принудительно включаем их поддержку через внутренние флаги.
+          export CFLAGS="$TARGET_FLAGS -isysroot $SDK_PATH -I${{ github.workspace }}/libs/include"
+          export LDFLAGS="$TARGET_FLAGS -isysroot $SDK_PATH -L${{ github.workspace }}/libs/lib -Wl,-platform_version,macos,10.13,10.13"
+          
           ./configure \
-            --prefix="$GITHUB_WORKSPACE/dist" \
+            --prefix="${{ github.workspace }}/dist" \
+            --extra-cflags="$CFLAGS" \
+            --extra-ldflags="$LDFLAGS" \
+            --cc="clang" \
+            --host-cc="clang" \
+            --target-os=darwin \
+            --arch=x86_64 \
+            --enable-cross-compile \
             --enable-static \
             --disable-shared \
             --enable-gpl \
             --enable-nonfree \
-            --arch=x86_64 \
-            --target-os=darwin \
-            --enable-cross-compile \
-            --cc='clang -arch x86_64' \
-            --extra-cflags="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -I$GITHUB_WORKSPACE/libs/include" \
-            --extra-ldflags="-arch x86_64 -mmacosx-version-min=10.13 -isysroot $SDK_PATH -L$GITHUB_WORKSPACE/libs/lib -Wl,-platform_version,macos,10.13,10.13" \
+            --enable-libsvtav1 \
+            --enable-libfdk-aac \
+            --enable-libopus \
+            --enable-libmp3lame \
+            --pkg-config-flags="--static" \
             --disable-debug \
-            --disable-pkg-config \
-            --extra-libs="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc -lfdk-aac -lopus -lmp3lame -lpthread -lm -ldl -lz"
-          
-          # Трюк: заставляем FFmpeg думать, что кодеки включены
-          # Это заменяет флаги --enable-lib...
-          echo "#define CONFIG_LIBFDK_AAC 1" >> config.h
-          echo "#define CONFIG_LIBMP3LAME 1" >> config.h
-          echo "#define CONFIG_LIBOPUS 1" >> config.h
-          echo "#define CONFIG_LIBSVTAV1 1" >> config.h
+            --disable-doc \
+            --extra-libs="-lpthread -lm -lz -ldl"
+
+          echo "--- ПРОВЕРКА КОНФИГУРАЦИИ ---"
+          # Проверяем, что кодеки включены в отчет
+          if ! grep -E "libsvtav1|libfdk_aac|libopus" config.h > /dev/null; then
+            echo "ОШИБКА: Кодеки не найдены в config.h. Проверьте пути к библиотекам."
+            exit 1
+          fi
           
           make -j$(sysctl -n hw.ncpu)
           make install
 
-      - name: Upload Result
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-highsierra-full
+          name: ffmpeg-high-sierra
           path: dist/bin/ffmpeg

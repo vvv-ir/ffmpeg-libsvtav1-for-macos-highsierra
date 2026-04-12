@@ -1,0 +1,46 @@
+name: Build Static FFmpeg for High Sierra
+
+on:
+  workflow_dispatch: # Запуск кнопкой вручную
+
+jobs:
+  build:
+    runs-on: macos-12 # Стабильная база
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.13"
+    steps:
+      - name: Install Build Tools
+        run: brew install automake fdk-aac git lame libass libtool libvorbis libvpx opus x264 x265 xvid nasm pkg-config
+
+      - name: Clone FFmpeg
+        run: git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git .
+
+      - name: Configure and Build
+        run: |
+          ./configure \
+            --prefix="./build" \
+            --enable-global \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-nonfree \
+            --enable-libass \
+            --enable-libfdk-aac \
+            --enable-libfreetype \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libvorbis \
+            --enable-libvpx \
+            --enable-libx264 \
+            --enable-libx265 \
+            --extra-cflags="-mmacosx-version-min=10.13" \
+            --extra-ldflags="-mmacosx-version-min=10.13"
+          
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-high-sierra-static
+          path: build/bin/ffmpeg

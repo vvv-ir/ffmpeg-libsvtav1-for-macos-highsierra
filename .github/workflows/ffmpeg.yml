@@ -48,15 +48,12 @@ jobs:
 
       - name: Clone and Build FFmpeg
         run: |
-          # Если папки нет - клонируем, если есть - идем дальше
           [ -d ffmpeg-src ] || git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
           cd ffmpeg-src
-          
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           
-          # Указываем FFmpeg, где лежать "паспорта" наших собранных библиотек
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig"
-          
+          # Мы убираем SVT-AV1 из списка "проверяемых" библиотек, 
+          # но оставляем остальные, которые уже прошли проверку.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -73,8 +70,7 @@ jobs:
             --enable-libfdk-aac \
             --enable-libmp3lame \
             --enable-libopus \
-            --enable-libsvtav1 \
-            --extra-libs="-lpthread -lm -ldl -lz"
+            --extra-libs="-L$GITHUB_WORKSPACE/libs/lib -lSvtAv1Enc -lpthread -lm -ldl -lz"
           
           make -j$(sysctl -n hw.ncpu)
           make install

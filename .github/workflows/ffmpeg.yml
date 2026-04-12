@@ -32,8 +32,9 @@ jobs:
       - name: Configure and Build FFmpeg
         run: |
           cd ffmpeg-src
-          # Указываем пути к нашему SVT-AV1 и системным либам Homebrew
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig:/usr/local/lib/pkgconfig:/opt/homebrew/lib/pkgconfig"
+          # Магия: узнаем где именно в этой системе лежит brew и его конфиги
+          BREW_PREFIX=$(brew --prefix)
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/libs/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig"
           
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
@@ -51,8 +52,8 @@ jobs:
             --enable-libsvtav1 \
             --arch=x86_64 \
             --target-os=darwin \
-            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include -I/usr/local/include -I/opt/homebrew/include" \
-            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L/usr/local/lib -L/opt/homebrew/lib"
+            --extra-cflags="-mmacosx-version-min=10.13 -arch x86_64 -I$GITHUB_WORKSPACE/libs/include -I$BREW_PREFIX/include" \
+            --extra-ldflags="-mmacosx-version-min=10.13 -arch x86_64 -L$GITHUB_WORKSPACE/libs/lib -L$BREW_PREFIX/lib"
           
           make -j$(sysctl -n hw.ncpu)
           make install

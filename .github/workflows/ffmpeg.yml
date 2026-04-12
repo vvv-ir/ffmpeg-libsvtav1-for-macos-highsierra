@@ -19,10 +19,15 @@ jobs:
         run: |
           cd ffmpeg-src
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
-          BP=$(brew --prefix)
           
-          # Мы подменяем pkg-config на 'true' (команда, которая всегда возвращает успех, но ничего не делает)
-          # Это заставит FFmpeg игнорировать системные проверки и брать наши пути.
+          # Находим пути к каждой библиотеке через brew
+          FDK_PATH=$(brew --prefix fdk-aac)
+          LAME_PATH=$(brew --prefix lame)
+          OPUS_PATH=$(brew --prefix opus)
+          VPX_PATH=$(brew --prefix libvpx)
+          X264_PATH=$(brew --prefix x264)
+          X265_PATH=$(brew --prefix x265)
+          
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --enable-static \
@@ -34,8 +39,14 @@ jobs:
             --enable-cross-compile \
             --cc='clang -arch x86_64' \
             --pkg-config="/usr/bin/true" \
-            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -I$BP/include -I$GITHUB_WORKSPACE/libs/include" \
-            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH -L$BP/lib -L$GITHUB_WORKSPACE/libs/lib" \
+            --extra-cflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH \
+                            -I$GITHUB_WORKSPACE/libs/include \
+                            -I$FDK_PATH/include -I$LAME_PATH/include -I$OPUS_PATH/include \
+                            -I$VPX_PATH/include -I$X264_PATH/include -I$X265_PATH/include" \
+            --extra-ldflags="-target x86_64-apple-macos10.13 -isysroot $SDK_PATH \
+                             -L$GITHUB_WORKSPACE/libs/lib \
+                             -L$FDK_PATH/lib -L$LAME_PATH/lib -L$OPUS_PATH/lib \
+                             -L$VPX_PATH/lib -L$X264_PATH/lib -L$X265_PATH/lib" \
             --disable-debug \
             --enable-libx264 \
             --enable-libx265 \

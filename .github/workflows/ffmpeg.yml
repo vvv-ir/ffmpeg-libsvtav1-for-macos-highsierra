@@ -1,10 +1,10 @@
-name: FFmpeg_HighSierra_Final_Fortress
+name: FFmpeg_HighSierra_Final_Fortress_v40
 on: [push, workflow_dispatch]
 
 # Блок глобальных переменных. Это "пульт управления" всем билдом.
 env:
-  # Индекс версии кэша. Если поменяешь на v31, GitHub удалит старое и соберет всё с нуля.
-  CACHE_REV: "v30"
+  # Индекс версии кэша. Если поменяешь на v41, GitHub удалит старое и соберет всё с нуля.
+  CACHE_REV: "v40"
   # Путь, где будет жить наш кросс-компилятор (инструмент для сборки под macOS на Linux)
   OSXCROSS_ROOT: /home/runner/osxcross
   # Папка, куда мы будем устанавливать собранные библиотеки (Opus, SVT-AV1)
@@ -64,38 +64,46 @@ jobs:
         run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
 
       # --- СБОРКА БИБЛИОТЕК (OPUS И SVT-AV1) ---
-      - name: Restore Deps Cache # Восстанавливаем ранее собранные библиотеки (Opus, AV1)
-        id: restore-deps
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.INSTALL_DIR }}
-          # Ключ включает ID запуска, чтобы GitHub не ругался на "уже существующий кэш"
-          key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
-          restore-keys: deps-${{ env.CACHE_REV }}-
-
       - name: Build Static Libraries # Сборка кодеков в статическом виде (внутри бинарника)
+        id: build_libs
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # OPUS: Аудио-кодек. Проверяем, нет ли его уже в папке либ
+          # OPUS: Исправляем ошибку линковки тестов (ранее падал на repacketizer_demo)
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
+            echo "--- Сборка Opus ---"
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
-            # Указываем кросс-компилятор o64-clang и цель darwin (macOS)
-            CC=o64-clang CXX=o64-clang++ ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
+            # --disable-extra-programs: ОЧЕНЬ ВАЖНО. Отключает сборку демо-плееров, 
+            # которые требуют системных звуковых библиотек macOS (которых нет при кросс-сборке).
+            CC=o64-clang CXX=o64-clang++ ./configure \
+              --host=x86_64-apple-darwin \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static \
+              --disable-shared \
+              --disable-extra-programs \
+              --disable-doc
             make -j$(nproc) install && cd ..
           fi
 
-          # SVT-AV1: Мощный видео-кодек для AV1. Используем CMake
+          # SVT-AV1: Исправляем ошибку CMake "Cannot determine OSXCROSS_TARGET_DIR"
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
+            echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # Указываем CMake файл настроек (toolchain) из нашего osxcross
+            # ПРИНУДИТЕЛЬНЫЙ ЭКСПОРТ: CMake теряет путь к osxcross, если не указать его явно в env
+            export OSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target
+            
+            # -DCMAKE_MAKE_PROGRAM: Указываем путь к make, если CMake его не нашел автоматически
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
-              -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_TESTS=OFF \
+              -DENABLE_EXAMPLES=OFF
             cmake --build build -j$(nproc) --target install && cd ..
           fi
 
@@ -113,59 +121,56 @@ jobs:
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # Говорим конфигуратору искать наши либы (Opus, AV1) строго в папке deps_dist
+          # PKG_CONFIG_LIBDIR: Изолирует поиск библиотек только нашей папкой deps_dist
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
           
           # КОНФИГУРАЦИЯ FFMPEG:
-          # --enable-cross-compile: сообщаем, что собираем для другой системы (macOS на Linux)
-          # --enable-static: вшиваем все либы внутрь одного файла ffmpeg (чтобы он работал везде сам)
-          # -Wl,-platform_version: МАГИЯ. Говорим линковщику Apple "да, SDK у нас новый (10.15),
-          # но бинарник должен прикидываться старым (10.13)". Это решает ошибку ___isPlatformVersionAtLeast.
+          # -Wl,-platform_version: МАГИЯ. Решает проблему символа ___isPlatformVersionAtLeast.
+          # Говорит линковщику: "Билд сделан на SDK 10.15, но таргет — 10.13".
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
             --target-os=darwin \
             --arch=x86_64 \
-            --cc=o64-clang \
-            --cxx=o64-clang++ \
-            --nm=${{ env.OSXCROSS_HOST }}-nm \
-            --ar=${{ env.OSXCROSS_HOST }}-ar \
-            --as=${{ env.OSXCROSS_HOST }}-as \
-            --strip=${{ env.OSXCROSS_HOST }}-strip \
-            --pkg-config=pkg-config \
-            --enable-static \
-            --disable-shared \
-            --enable-gpl --enable-nonfree \
-            --enable-libopus --enable-libsvtav1 \
+            --cc=o64-clang --cxx=o64-clang++ \
+            --nm=${{ env.OSXCROSS_HOST }}-nm --ar=${{ env.OSXCROSS_HOST }}-ar --as=${{ env.OSXCROSS_HOST }}-as \
+            --pkg-config=pkg-config --enable-static --disable-shared \
+            --enable-gpl --enable-nonfree --enable-libopus --enable-libsvtav1 \
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -Wl,-platform_version,macos,${{ env.MACOS_MIN_VER }},${{ env.SDK_VERSION }}" \
-            --disable-doc || { tail -n 100 ffbuild/config.log; exit 1; }
+            --disable-doc || { exit 1; }
 
           make -j$(nproc)
           make install
           
           # ПРОВЕРКА "ЗАЩИТА ОТ ДУРАКА": 
-          # Если FFmpeg весит 14 МБ — значит либы не влинковались. 
-          # Мы ждем файл размером 50-80 МБ. Если он меньше 40 МБ — билд падает.
+          # Если FFmpeg весит < 40 МБ — значит либы (SVT-AV1 весит ~30МБ) не влинковались.
           SIZE=$(stat -c%s "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg")
           echo "Финальный размер файла: $SIZE байт"
           if [ $SIZE -lt 40000000 ]; then 
-            echo "ОШИБКА: Файл слишком мелкий! Скорее всего, кодеки не попали внутрь."
+            echo "ОШИБКА: Файл слишком мелкий! Кодеки не попали внутрь."
             exit 1
           fi
 
-      - name: Upload Config Log on Failure # Если FFmpeg не собрался, Гитхаб даст скачать лог ошибок
-        if: failure() && steps.ffmpeg_build.outcome == 'failure'
+      # --- ГЛОБАЛЬНЫЙ СБОРЩИК ЛОГОВ (ВЫРУЧАЛОЧКА) ---
+      - name: Upload All Possible Logs
+        # Этот шаг сработает, если упал ЛЮБОЙ из предыдущих шагов
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-config-log
-          path: ffmpeg-src/ffbuild/config.log
+          name: debug-logs-package
+          # Собираем логи конфигурации из всех подпапок (FFmpeg, Opus, SVT-AV1)
+          path: |
+            ffmpeg-src/ffbuild/config.log
+            opus/config.log
+            SVT-AV1/build/CMakeFiles/CMakeError.log
+            SVT-AV1/build/CMakeFiles/CMakeOutput.log
 
-      - name: Upload FFmpeg # Если всё прошло успешно — выгружаем готовый FFmpeg!
+      - name: Upload Final FFmpeg # Если всё прошло успешно — выгружаем готовый FFmpeg!
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-success
+          name: ffmpeg-high-sierra
           path: dist_ffmpeg/bin/ffmpeg

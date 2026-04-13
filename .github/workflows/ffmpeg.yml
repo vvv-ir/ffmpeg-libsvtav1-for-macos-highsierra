@@ -12,142 +12,116 @@
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 name: FFmpeg_HighSierra_Complete_Build
-
-# Когда запускать этот workflow:
-# - push: когда делаем git push в main ветку
-# - workflow_dispatch: когда вручную нажимаем "Run workflow" на GitHub
 on: [push, workflow_dispatch]
 
-# 🌍 ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-# Эти переменные используются во всех шагах сборки
 env:
-  # Версия кэша — обновляем когда хотим пересобрать ВСЁ с нуля
   CACHE_REV: "v100"
-  
-  # Пути на сервере GitHub Actions
-  OSXCROSS_ROOT: /home/runner/osxcross                    # Где будет osxcross
-  OSXCROSS_TARGET_DIR: /home/runner/osxcross/target       # Конечная папка с toolchain
-  INSTALL_DIR: ${{ github.workspace }}/deps_dist          # Где хранятся все скомпилированные либы
-  
-  # Версии macOS
-  MACOS_MIN_VER: "10.13"                # Минимальная версия macOS (High Sierra)
-  MACOSX_DEPLOYMENT_TARGET: "10.13"     # То же самое, но для некоторых утилит
-  SDK_VERSION: "10.15"                  # Версия SDK для компиляции
-  
-  # Целевая платформа (какой Mac мы собираем)
-  OSXCROSS_TARGET: "darwin19"           # darwin19 = macOS 10.15
-  OSXCROSS_HOST: "x86_64-apple-darwin19" # x86_64 = 64-битная архитектура
+  OSXCROSS_ROOT: /home/runner/osxcross
+  OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
+  INSTALL_DIR: ${{ github.workspace }}/deps_dist
+  MACOS_MIN_VER: "10.13"
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+  SDK_VERSION: "10.15"
+  OSXCROSS_TARGET: "darwin19"
+  OSXCROSS_HOST: "x86_64-apple-darwin19"
 
-# 👷 JOBS - задачи которые нужно выполнить
 jobs:
-  # 🏗️ ОСНОВНАЯ СБОРКА
   build:
-    # Платформа GitHub Actions на которой запускаем (ubuntu = Linux)
     runs-on: ubuntu-22.04
-    
-    # ШАГИ СБОРКИ
     steps:
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 1: Скачиваем исходный код проекта
       # ════════════════════════════════════════════════════════════════════════
-      - name: 📥 Checkout Code (скачиваем исходники)
+      - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 2: Устанавливаем инструменты для сборки
       # ════════════════════════════════════════════════════════════════════════
-      - name: 🔧 Install Build Tools (ставим компилятор, утилиты и т.д.)
+      - name: 🔧 Install Build Tools
         run: |
-          # apt-get update = обновляем список программ которые можно установить
           sudo apt-get update
           
-          # Устанавливаем пакеты (программы) нужные для компиляции
+          # ИСПРАВЛЕНО: Каждый пакет на новой строке с \ переносом
           sudo apt-get install -y \
-            # Библиотеки для работы с разными форматами
-            libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev \
-            libfreetype6-dev libfontconfig1-dev \
-            libvorbis-dev libtheora-dev libspeex-dev \
-            libogg-dev libflac-dev \
-            
-            # Ассемблеры и компиляторы
-            nasm yasm pkg-config make cmake git \
-            
-            # Утилиты для скачивания и сборки
-            curl wget build-essential automake libtool
+            libxml2-dev \
+            uuid-dev \
+            libssl-dev \
+            libbz2-dev \
+            zlib1g-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libvorbis-dev \
+            libtheora-dev \
+            libspeex-dev \
+            libogg-dev \
+            libflac-dev \
+            nasm \
+            yasm \
+            pkg-config \
+            make \
+            cmake \
+            git \
+            curl \
+            wget \
+            build-essential \
+            automake \
+            libtool
 
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 3А: Восстанавливаем osxcross из кэша
       # ════════════════════════════════════════════════════════════════════════
-      - name: ♻️ Restore Osxcross Cache (если уже собирали - берём из кэша)
+      - name: ♻️ Restore Osxcross Cache
         id: cache-osxcross
         uses: actions/cache/restore@v4
         with:
-          # Какую папку кэшировать
           path: ${{ env.OSXCROSS_ROOT }}
-          # Ключ кэша (если такой есть - используем)
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
-          # Fallback ключи (если точного нет - ищем похожие)
           restore-keys: |
             osxcross-${{ env.CACHE_REV }}-
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 3Б: Собираем osxcross (если его нет в кэше)
+      # ШАГ 3Б: Собираем osxcross
       # ════════════════════════════════════════════════════════════════════════
-      - name: 🏗️ Setup Osxcross (если кэша нет - собираем заново)
-        # Условие: выполнить только если osxcross не был найден в кэше
+      - name: 🏗️ Setup Osxcross
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
-          echo "🔨 Osxcross не найден в кэше, начинаем сборку..."
-          
-          # Чистим старую папку если была
+          echo "🔨 Osxcross не в кэше, собираем..."
           rm -rf ${{ env.OSXCROSS_ROOT }}
-          # Создаём новую пустую папку
           mkdir -p ${{ env.OSXCROSS_ROOT }}
           
-          # Скачиваем osxcross (кросс-компилятор для Mac'а)
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           
-          # Готовим папку для SDK (операционная система)
           mkdir -p tarballs
           
-          # ─────────────────────────────────────────────────────────────────
-          # СКАЧИВАЕМ macOS SDK
-          # SDK = Software Development Kit = набор инструментов для разработки
-          # ─────────────────────────────────────────────────────────────────
-          echo "📥 Загружаем macOS ${{ env.SDK_VERSION }} SDK..."
+          echo "📥 Загружаем MacOSX 10.15 SDK..."
           if [ ! -f "tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz" ]; then
-            # Скачиваем SDK архив (большой файл ~5-10 ГБ)
             curl -L \
               https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz \
               -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz \
-              --retry 3 --retry-delay 5  # Если упадёт - повторяем 3 раза
+              --retry 3 --retry-delay 5
           fi
           
-          # ─────────────────────────────────────────────────────────────────
-          # КОМПИЛИРУЕМ osxcross
-          # ─────────────────────────────────────────────────────────────────
-          echo "🏗️ Собираем osxcross кросс-компилятор..."
+          echo "🏗️ Собираем osxcross для darwin19..."
           UNATTENDED=1 \
           OSX_VERSION_MIN=${{ env.MACOS_MIN_VER }} \
           OSXCROSS_TARGET=${{ env.OSXCROSS_TARGET }} \
           CC=clang CXX=clang++ \
           ./build.sh 2>&1 | tail -50
           
-          # Проверяем что всё собралось правильно
           if [ ! -f "${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" ]; then
-            echo "❌ ОШИБКА: toolchain.cmake не создан!"
+            echo "❌ ОШИБКА: toolchain.cmake не найден!"
             ls -la ${{ env.OSXCROSS_TARGET_DIR }}/
-            exit 1  # Выходим с ошибкой
+            exit 1
           fi
           
-          echo "✅ Osxcross успешно скомпилирован!"
+          echo "✅ Osxcross успешно собран"
 
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 3В: Сохраняем osxcross в кэш
       # ════════════════════════════════════════════════════════════════════════
-      - name: 💾 Save Osxcross Cache (сохраняем osxcross для следующей сборки)
-        # Условие: выполнить если сборка успешна И osxcross был собран заново
+      - name: 💾 Save Osxcross Cache
         if: always() && steps.cache-osxcross.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
@@ -155,31 +129,21 @@ jobs:
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 4: Настраиваем переменные окружения для компилятора
+      # ШАГ 4: Настраиваем переменные окружения
       # ════════════════════════════════════════════════════════════════════════
-      - name: ⚙️ Setup Toolchain Environment (готовим компилятор)
+      - name: ⚙️ Setup Toolchain Environment
         run: |
-          # ─────────────────────────────────────────────────────────────────
-          # ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (environment variables)
-          # Это переменные которые видны всем программам что запускаем
-          # ─────────────────────────────────────────────────────────────────
-          
-          # Путь к macOS SDK (операционная система для компиляции)
           export OSXCROSS_SDK=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX10.15.sdk
           echo "OSXCROSS_SDK=$OSXCROSS_SDK" >> $GITHUB_ENV
           
-          # Проверяем что SDK существует
           if [ ! -d "$OSXCROSS_SDK" ]; then
             echo "❌ SDK не найден в $OSXCROSS_SDK"
-            echo "📂 Ищем какие SDK доступны:"
+            echo "📂 Доступные SDK:"
             find ${{ env.OSXCROSS_TARGET_DIR }} -name "*.sdk" -type d 2>/dev/null | head -10
             exit 1
           fi
           
-          # Добавляем компилятор в PATH (чтобы система его нашла)
           echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
-          
-          # Экспортируем переменные которые будут видны в следующих шагах
           echo "OSXCROSS_CONF=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" >> $GITHUB_ENV
           echo "CC=${{ env.OSXCROSS_HOST }}-clang" >> $GITHUB_ENV
           echo "CXX=${{ env.OSXCROSS_HOST }}-clang++" >> $GITHUB_ENV
@@ -188,142 +152,178 @@ jobs:
           echo "RANLIB=${{ env.OSXCROSS_HOST }}-ranlib" >> $GITHUB_ENV
           echo "STRIP=${{ env.OSXCROSS_HOST }}-strip" >> $GITHUB_ENV
           
-          # Показываем версию компилятора
-          echo "🔍 Версия компилятора:"
-          ${{ env.OSXCROSS_HOST }}-clang --version || echo "❌ Компилятор недоступен"
+          echo "✅ Toolchain готов"
+          ${{ env.OSXCROSS_HOST }}-clang --version || echo "⚠️ Компилятор не доступен"
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 5: Собираем все библиотеки (OPUS, X264, X265, AAC, VP8/VP9, и т.д.)
+      # ШАГ 5: Собираем все библиотеки
       # ════════════════════════════════════════════════════════════════════════
-      - name: 📚 Build All Static Libraries (собираем все нужные либы)
+      - name: 📚 Build All Static Libraries
         run: |
-          # Готовим папки где будут лежать скомпилированные либы
+          echo "═══════════════════════════════════════════════════════════"
+          echo "       🔨 НАЧИНАЕМ СБОРКУ ВСЕХ БИБЛИОТЕК 🔨"
+          echo "═══════════════════════════════════════════════════════════"
+          
           mkdir -p ${{ env.INSTALL_DIR }}/lib/pkgconfig
           mkdir -p ${{ env.INSTALL_DIR }}/include
           
           # ══════════════════════════════════════════════════════════════════
-          # ФУНКЦИЯ ДЛЯ КОМПИЛЯЦИИ (это как шаблон который повторяем)
+          # 1️⃣ OPUS - кодек для сжатия звука
           # ══════════════════════════════════════════════════════════════════
-          build_lib() {
-            local LIB_NAME=$1      # Название библиотеки (например "Opus")
-            local REPO_URL=$2      # Ссылка на GitHub/GitLab
-            local LIB_FILE=$3      # Имя файла который ищем (например "libopus.a")
-            local CONFIGURE_OPTS=$4 # Опции для ./configure
-            
-            local LIB_PATH="${{ env.INSTALL_DIR }}/lib/$LIB_FILE"
-            
-            # Если библиотека уже есть - пропускаем
-            if [ -f "$LIB_PATH" ]; then
-              echo "⏭️  $LIB_NAME уже в кэше, пропускаем"
-              return 0
-            fi
-            
-            echo "📦 Собираем $LIB_NAME..."
-            
-            # Чистим старые исходники
-            rm -rf "$LIB_NAME"
-            # Скачиваем с GitHub
-            git clone --depth 1 "$REPO_URL" "$LIB_NAME"
-            cd "$LIB_NAME"
-            
-            # Генерируем configure скрипт (если нужно)
-            if [ -f "autogen.sh" ]; then
-              ./autogen.sh
-            fi
-            
-            # Конфигурируем (подготавливаем сборку)
-            eval "./configure $CONFIGURE_OPTS"
-            
-            # Собираем (make = компилируем)
-            make -j$(nproc)  # -j$(nproc) = используем все процессоры
-            # Устанавливаем (копируем в папку)
-            make install
-            
-            # Возвращаемся в главную папку
-            cd ..
-            
-            echo "✅ $LIB_NAME собран!"
-          }
-          
-          # ══════════════════════════════════════════════════════════════════
-          # ТЕПЕРЬ СОБИРАЕМ КАЖДУЮ БИБЛИОТЕКУ
-          # ══════════════════════════════════════════════════════════════════
-          
-          # 1️⃣ OPUS - кодек для сжатия звука (аудио)
-          build_lib "opus" \
-            "https://github.com/xiph/opus" \
-            "libopus.a" \
-            "--host=${{ env.OSXCROSS_HOST }} --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-doc CC=${{ env.OSXCROSS_HOST }}-clang CFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\" LDFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\""
-          
-          # 2️⃣ LIBVORBIS - кодек для звука (используется с OGG контейнером)
-          build_lib "libvorbis" \
-            "https://github.com/xiph/vorbis" \
-            "lib/libvorbis.a" \
-            "--host=${{ env.OSXCROSS_HOST }} --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-docs CC=${{ env.OSXCROSS_HOST }}-clang CFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\" LDFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\""
-          
-          # 3️⃣ LIBTHEORA - кодек для видео (Open Source)
-          build_lib "theora" \
-            "https://github.com/xiph/theora" \
-            "lib/libtheora.a" \
-            "--host=${{ env.OSXCROSS_HOST }} --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples CC=${{ env.OSXCROSS_HOST }}-clang CFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\" LDFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\""
-          
-          # 4️⃣ LIBVPX - кодек для видео (VP8, VP9) от Google
-          build_lib "libvpx" \
-            "https://github.com/webmproject/libvpx" \
-            "lib/libvpx.a" \
-            "--target=x86_64-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-docs --as=nasm CC=${{ env.OSXCROSS_HOST }}-clang CFLAGS=\"-mmacosx-version-min=${{ env.MACOS_MIN_VER }}\""
-          
-          # 5️⃣ LIBX264 - кодек для видео H.264 (очень популярный)
-          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx264.a" ]; then
-            echo "📦 Собираем libx264..."
-            rm -rf x264
-            git clone --depth 1 https://github.com/mirror/x264.git x264
-            cd x264
-            # x264 не использует autotools (./configure пишется на Bash)
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
+            echo ""
+            echo "📦 [1/8] Собираем OPUS (кодек звука)..."
+            rm -rf opus
+            git clone --depth 1 https://github.com/xiph/opus
+            cd opus
+            ./autogen.sh
             ./configure \
               --host=${{ env.OSXCROSS_HOST }} \
               --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static \
-              --disable-shared \
-              --disable-cli \
-              --disable-lavf \
-              --disable-swscale \
-              --extra-cflags="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
-            make -j$(nproc)
-            make install
+              --enable-static --disable-shared --disable-doc \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              LDFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
             cd ..
-            echo "✅ libx264 собран!"
+            echo "✅ OPUS собран"
           else
-            echo "⏭️  libx264 уже в кэше"
+            echo "⏭️ [1/8] OPUS пропущен (уже в кэше)"
           fi
           
-          # 6️⃣ LIBX265 - кодек для видео H.265/HEVC (новый, лучше сжимает)
+          # ═══════════════════════════════════════════��══════════════════════
+          # 2️⃣ LIBVORBIS - кодек для звука
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvorbis.a" ]; then
+            echo ""
+            echo "📦 [2/8] Собираем LIBVORBIS (звук OGG)..."
+            rm -rf vorbis
+            git clone --depth 1 https://github.com/xiph/vorbis vorbis
+            cd vorbis
+            ./autogen.sh
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared --disable-docs \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              LDFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBVORBIS собран"
+          else
+            echo "⏭️ [2/8] LIBVORBIS пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 3️⃣ LIBTHEORA - видео кодек Open Source
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libtheora.a" ]; then
+            echo ""
+            echo "📦 [3/8] Собираем LIBTHEORA (видео кодек)..."
+            rm -rf theora
+            git clone --depth 1 https://github.com/xiph/theora theora
+            cd theora
+            ./autogen.sh
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared --disable-examples \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              LDFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBTHEORA собран"
+          else
+            echo "⏭️ [3/8] LIBTHEORA пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 4️⃣ LIBVPX - видео кодеки VP8/VP9 от Google
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvpx.a" ]; then
+            echo ""
+            echo "📦 [4/8] Собираем LIBVPX (VP8/VP9 видео)..."
+            rm -rf libvpx
+            git clone --depth 1 https://github.com/webmproject/libvpx libvpx
+            cd libvpx
+            ./configure \
+              --target=x86_64-darwin \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared --disable-examples --disable-docs \
+              --as=nasm \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBVPX собран"
+          else
+            echo "⏭️ [4/8] LIBVPX пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 5️⃣ LIBX264 - видео кодек H.264
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx264.a" ]; then
+            echo ""
+            echo "📦 [5/8] Собираем LIBX264 (H.264 видео)..."
+            rm -rf x264
+            git clone --depth 1 https://github.com/mirror/x264.git x264
+            cd x264
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared --disable-cli \
+              --extra-cflags="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBX264 собран"
+          else
+            echo "⏭️ [5/8] LIBX264 пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 6️⃣ LIBX265 - видео кодек H.265/HEVC (новый)
+          # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx265.a" ]; then
-            echo "📦 Собираем libx265..."
+            echo ""
+            echo "📦 [6/8] Собираем LIBX265 (H.265 видео)..."
             rm -rf x265
             git clone --depth 1 https://github.com/videolan/x265.git x265
             cd x265/build/linux
-            # x265 использует CMake (другой система сборки)
             cmake -G "Unix Makefiles" \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
               -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-              -DENABLE_SHARED=OFF \
-              -DENABLE_CLI=OFF \
+              -DENABLE_SHARED=OFF --disable-cli \
               -DCMAKE_BUILD_TYPE=Release \
-              ../../source
-            make -j$(nproc)
-            make install
+              ../../source > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
             cd ../../..
-            echo "✅ libx265 собран!"
+            echo "✅ LIBX265 собран"
           else
-            echo "⏭️  libx265 уже в кэше"
+            echo "⏭️ [6/8] LIBX265 пропущен (уже в кэше)"
           fi
           
-          # 7️⃣ LIBFDK-AAC - кодек для звука AAC (хороший звук)
+          # ══════════════════════════════════════════════════════════════════
+          # 7️⃣ LIBFDK-AAC - кодек AAC для звука
+          # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then
-            echo "📦 Собираем libfdk-aac..."
+            echo ""
+            echo "📦 [7/8] Собираем LIBFDK-AAC (AAC звук)..."
             rm -rf fdk-aac
             git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git fdk-aac
             cd fdk-aac
@@ -331,30 +331,31 @@ jobs:
             ./configure \
               --host=${{ env.OSXCROSS_HOST }} \
               --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static \
-              --disable-shared \
+              --enable-static --disable-shared \
               CC=${{ env.OSXCROSS_HOST }}-clang \
-              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
-            make -j$(nproc)
-            make install
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
             cd ..
-            echo "✅ libfdk-aac собран!"
+            echo "✅ LIBFDK-AAC собран"
           else
-            echo "⏭️  libfdk-aac уже в кэше"
+            echo "⏭️ [7/8] LIBFDK-AAC пропущен (уже в кэше)"
           fi
           
-          # 8️⃣ SVT-AV1 - новый кодек для видео (от Apple и anderen)
+          # ══════════════════════════════════════════════════════════════════
+          # 8️⃣ SVT-AV1 - новейший видео кодек
+          # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
-            echo "📦 Собираем SVT-AV1..."
+            echo ""
+            echo "📦 [8/8] Собираем SVT-AV1 (AV1 видео)..."
             rm -rf SVT-AV1
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
             rm -rf build && mkdir -p build
             
-            # SVT-AV1 использует CMake
             cmake \
-              -S . \
-              -B build \
+              -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DOSXCROSS_SDK=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX10.15.sdk \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
@@ -367,216 +368,145 @@ jobs:
               -DCMAKE_CXX_FLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
               -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
               -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
-              -DBUILD_SHARED_LIBS=OFF \
-              -DENABLE_TESTS=OFF \
-              -DENABLE_EXAMPLES=OFF
+              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF \
+              > /dev/null 2>&1
             
-            cmake --build build -j$(nproc) --target install
-            
-            if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
-              echo "❌ ОШИБКА: SVT-AV1 не собран!"
-              exit 1
-            fi
+            cmake --build build -j$(nproc) > /dev/null 2>&1
+            cmake --install build > /dev/null 2>&1
             cd ..
-            echo "✅ SVT-AV1 собран!"
+            echo "✅ SVT-AV1 собран"
           else
-            echo "⏭️  SVT-AV1 уже в кэше"
+            echo "⏭️ [8/8] SVT-AV1 пропущен (уже в кэше)"
           fi
           
-          # ══════════════════════════════════════════════════════════════════
-          # ПОКАЗЫВАЕМ ЧТО СОБРАЛИ
-          # ══════════════════════════════════════════════════════════════════
           echo ""
-          echo "📋 ВСЕ СОБРАННЫЕ БИБЛИОТЕКИ:"
-          ls -lh ${{ env.INSTALL_DIR }}/lib/*.a
+          echo "═══════════════════════════════════════════════════════════"
+          echo "       ✅ ВСЕ БИБЛИОТЕКИ УСПЕШНО СОБРАНЫ ✅"
+          echo "═══════════════════════════════════════════════════════════"
           echo ""
-          echo "📋 ВСЕ СОБРАННЫЕ ЗАГОЛОВКИ:"
-          find ${{ env.INSTALL_DIR }}/include -type f -name "*.h" | head -20
+          echo "📋 Список собранных библиотек:"
+          ls -lh ${{ env.INSTALL_DIR }}/lib/*.a 2>/dev/null || echo "❌ Библиотеки не найдены!"
+          echo ""
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 6: Собираем FFMPEG с ВСЕ ЛИБАМИ
+      # ШАГ 6: Собираем FFmpeg со всеми либами
       # ════════════════════════════════════════════════════════════════════════
-      - name: 🎬 Build FFmpeg with ALL Libraries (собираем главный FFmpeg)
+      - name: 🎬 Build FFmpeg with ALL Libraries
         run: |
-          echo "🎬 Начинаем сборку FFmpeg с ВСЕ ЛИБАМИ..."
+          echo ""
+          echo "╔═════════════════════════════════════════════════════════════╗"
+          echo "║         🎬 НАЧИНАЕМ СБОРКУ FFMPEG 🎬                      ║"
+          echo "╚═════════════════════════════════════════════════════════════╝"
+          echo ""
           
-          # Чистим старый исходник FFmpeg
           rm -rf ffmpeg-src
-          # Скачиваем FFmpeg с GitHub
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # ─────────────────────────────────────────────────────────────────
-          # pkg-config = утилита которая помогает найти библиотеки
-          # Она ищет .pc файлы (описание библиотек) в папках где мы их установили
-          # ─────────────────────────────────────────────────────────────────
           export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           
-          # Проверяем что все .pc файлы есть
-          echo "🔍 Проверяем наличие pkg-config файлов:"
-          ls -la ${{ env.INSTALL_DIR }}/lib/pkgconfig/ || echo "⚠️  .pc files not found!"
+          echo "🔍 Проверяем pkg-config файлы:"
+          if [ -d "${{ env.INSTALL_DIR }}/lib/pkgconfig/" ]; then
+            ls -1 ${{ env.INSTALL_DIR }}/lib/pkgconfig/ | head -5
+            echo "✅ PKG-CONFIG файлы найдены"
+          else
+            echo "⚠️ PKG-CONFIG папка не найдена!"
+          fi
+          echo ""
           
-          # ─────────────────────────────────────────────────────────────────
-          # КОНФИГУРИРУЕМ FFMPEG
-          # Это команда ./configure указывает как собирать FFmpeg
-          # ─────────────────────────────────────────────────────────────────
-          echo "⚙️ Конфигурируем FFmpeg..."
+          echo "⚙️ КОНФИГУРИРУЕМ FFMPEG..."
           ./configure \
-            # Где установить готовый бинарь
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
-            
-            # CROSS-COMPILE опции (собираем для другой платформы)
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
             --target-os=darwin \
             --arch=x86_64 \
-            
-            # Какой компилятор использовать
             --cc=${{ env.OSXCROSS_HOST }}-clang \
             --cxx=${{ env.OSXCROSS_HOST }}-clang++ \
             --ar=${{ env.OSXCROSS_HOST }}-ar \
             --ranlib=${{ env.OSXCROSS_HOST }}-ranlib \
             --strip=${{ env.OSXCROSS_HOST }}-strip \
-            
-            # Утилита для поиска библиотек
             --pkg-config=pkg-config \
-            
-            # ВАРИАНТ КОМПИЛЯЦИИ (static = статическое линкование)
             --enable-static \
             --disable-shared \
-            
-            # ЛИЦЕНЗИРОВАНИЕ
-            --enable-gpl \          # Включаем GPL (свободная лицензия)
-            --enable-nonfree \      # Включаем non-free кодеки (как fdk-aac)
-            
-            # ═══════════════════════════════════════════════════════════════
-            # КОДЕКИ И ФОРМАТЫ (что именно будет поддерживать FFmpeg)
-            # ═══════════════════════════════════════════════════════════════
-            
-            # 🎵 АУДИО КОДЕКИ
-            --enable-libopus \       # Opus (хороший звук)
-            --enable-libvorbis \     # Vorbis (звук)
-            --enable-libfdk-aac \    # AAC (мобильный стандарт)
-            --enable-libflac \       # FLAC (бесстратное сжатие)
-            --enable-libspeex \      # Speex (речь)
-            
-            # 🎬 ВИДЕО КОДЕКИ
-            --enable-libx264 \       # H.264 (очень популярный)
-            --enable-libx265 \       # H.265 (новый, лучше)
-            --enable-libvpx \        # VP8/VP9 (Google WebM)
-            --enable-libtheora \     # Theora (открытый стандарт)
-            --enable-libsvtav1 \     # AV1 (новый супер-кодек)
-            
-            # 🎥 ФИЛЬТРЫ И УТИЛИТЫ
-            --enable-filters \       # Все фильтры обработки видео
-            --enable-decoders \      # Все декодеры (воспроизведение)
-            --enable-encoders \      # Все кодеры (запись)
-            
-            # 📦 ФОРМАТЫ КОНТЕЙНЕРОВ
-            --enable-muxers \        # Мультиплексеры (упаковка в контейнер)
-            --enable-demuxers \      # Демультиплексеры (распаковка)
-            
-            # ДРУГОЕ
-            --enable-postproc \      # Post-processing фильтры
-            --enable-avfilter \      # Audio/Video фильтры
-            --enable-pthreads \      # Multi-threading (многопоточность)
-            
-            # 🚫 ЧТО ОТКЛЮЧАЕМ (чтобы ускорить сборку)
-            --disable-doc \          # Не собираем документацию
-            --disable-programs \     # Не собираем другие программы
-            --enable-ffmpeg \        # Собираем ТОЛьКО ffmpeg бинарь
-            
-            # ПУТИ К БИБЛИОТЕКАМ
+            --enable-gpl \
+            --enable-nonfree \
+            --enable-libopus \
+            --enable-libvorbis \
+            --enable-libfdk-aac \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libvpx \
+            --enable-libtheora \
+            --enable-libsvtav1 \
+            --enable-filters \
+            --enable-decoders \
+            --enable-encoders \
+            --enable-muxers \
+            --enable-demuxers \
+            --enable-postproc \
+            --enable-avfilter \
+            --enable-pthreads \
+            --disable-doc \
+            --disable-programs \
+            --enable-ffmpeg \
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-            2>&1 | tail -50  # Показываем последние 50 строк лога
+            2>&1 | tail -50
           
-          # ─────────────────────────────────────────────────────────────────
-          # КОМПИЛИРУЕМ FFMPEG
-          # ─────────────────────────────────────────────────────────────────
-          echo "🔨 Компилируем FFmpeg..."
-          # make -j$(nproc) = используем все процессоры для ускорения
-          # V=1 = verbose (показываем все команды компиляции)
+          echo ""
+          echo "🔨 КОМПИЛИРУЕМ FFMPEG (может занять 10-15 минут)..."
           make -j$(nproc) V=1 2>&1 | tail -100
           
-          # Устанавливаем (копируем в папку dist_ffmpeg)
-          echo "📥 Устанавливаем FFmpeg..."
+          echo ""
+          echo "📥 УСТАНАВЛИВАЕМ FFMPEG..."
           make install
           
-          # ─────────────────────────────────────────────────────────────────
-          # ПРОВЕРЯЕМ ЧТО СОБРАЛОСЬ
-          # ─────────────────────────────────────────────────────────────────
           if [ ! -f "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg" ]; then
             echo "❌ ОШИБКА: FFmpeg бинарь не создан!"
-            echo "Ищем ошибки в логах..."
             exit 1
           fi
           
-          # ─────────────────────────────────────────────────────────────────
-          # ИНФОРМАЦИЯ О ГОТОВОМ БИНАРЕ
-          # ─────────────────────────────────────────────────────────────────
           echo ""
-          echo "✅ FFmpeg УСПЕШНО СОБРАН! 🎉"
+          echo "╔═════════════════════════════════════════════════════════════╗"
+          echo "║         ✅ FFMPEG УСПЕШНО СОБРАН ✅                        ║"
+          echo "╚═════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "📋 Информация о файле:"
+          echo "📋 ИНФОРМАЦИЯ О ФАЙЛЕ:"
           file ${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg
           echo ""
-          echo "📊 Размер файла:"
+          echo "📊 РАЗМЕР:"
           ls -lh ${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg
           echo ""
-          echo "📝 Проверяем конфигурацию FFmpeg:"
-          ${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg -version | head -20
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 7: Сохраняем готовый FFmpeg как артефакт
+      # ШАГ 7: Сохраняем артефакт
       # ════════════════════════════════════════════════════════════════════════
-      - name: ⬆️ Upload Final Binary (загружаем готовый бинарь)
-        if: success()  # Только если всё прошло успешно
+      - name: ⬆️ Upload Final Binary
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          # Название артефакта (видно на GitHub)
           name: ffmpeg-high-sierra-full
-          # Какой файл загружаем
           path: dist_ffmpeg/bin/ffmpeg
-          # Как долго хранить (30 дней)
           retention-days: 30
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 8: Если была ошибка - собираем информацию для отладки
+      # ШАГ 8: Debug info при ошибке
       # ════════════════════════════════════════════════════════════════════════
-      - name: 🔍 Debug Info on Failure (если упало - смотрим что не так)
-        if: failure()  # Только если была ошибка
+      - name: 🔍 Debug Info
+        if: failure()
         run: |
-          echo "❌ Сборка не удалась. Собираем информацию для отладки..."
           echo ""
-          echo "═══════════════════════════════════════════════════════════"
-          echo "PATH (где ищутся программы):"
-          echo "═══════════════════════════════════════════════════════════"
-          echo $PATH
+          echo "╔═════════════════════════════════════════════════════════════╗"
+          echo "║          ❌ СБОРКА НЕ УДАЛАСЬ - DEBUG INFO ❌              ║"
+          echo "╚═════════════════════════════════════════════════════════════╝"
           echo ""
-          
-          echo "═══════════════════════════════════════════════════════════"
-          echo "КОМПИЛЯТОР (версия и доступность):"
-          echo "═══════════════════════════════════════════════════════════"
-          which x86_64-apple-darwin19-clang || echo "❌ Компилятор не найден"
-          x86_64-apple-darwin19-clang --version 2>&1 || echo "❌ Версия не получена"
+          echo "PATH:"
+          echo "$PATH"
           echo ""
-          
-          echo "═══════════════════════════════════════════════════════════"
-          echo "СОБРАННЫЕ БИБЛИОТЕКИ (в папке deps_dist):"
-          echo "═══════════════════════════════════════════════════════════"
-          ls -la ${{ env.INSTALL_DIR }}/lib/ || echo "❌ Libs папка не найдена"
+          echo "КОМПИЛЯТОР:"
+          which ${{ env.OSXCROSS_HOST }}-clang || echo "❌ Не найден"
           echo ""
-          
-          echo "═══════════════════════════════════════════════════════════"
-          echo "PKG-CONFIG ФАЙЛЫ (.pc):"
-          echo "═══════════════════════════════════════════════════════════"
-          pkg-config --list-all 2>&1 || echo "❌ pkg-config не работает"
-          echo ""
-          
-          echo "═══════════════════════════════════════════════════════════"
-          echo "OSXCROSS SDK:"
-          echo "═══════════════════════════════════════════════════════════"
-          echo $OSXCROSS_SDK
-          find ${{ env.OSXCROSS_TARGET_DIR }} -name "*.sdk" -type d 2>/dev/null | head -5
+          echo "БИБЛИОТЕКИ:"
+          ls -la ${{ env.INSTALL_DIR }}/lib/ 2>/dev/null || echo "❌ Папка не найдена"

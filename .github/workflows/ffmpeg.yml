@@ -124,12 +124,14 @@ jobs:
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
           
-          # Явно задаем хост и компиляторы для CMake, чтобы не падал toolchain.cmake
+          # Нам нужно передать OSXCROSS_TARGET_DIR, чтобы toolchain.cmake ожил
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
+            -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
             -DOSXCROSS_HOST=x86_64-apple-darwin19 \
             -DCMAKE_C_COMPILER=x86_64-apple-darwin19-clang \
             -DCMAKE_CXX_COMPILER=x86_64-apple-darwin19-clang++ \
+            -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \

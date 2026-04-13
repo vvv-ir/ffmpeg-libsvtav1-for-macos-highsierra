@@ -14,6 +14,7 @@
 name: FFmpeg_HighSierra_Complete_Build
 on: [push, workflow_dispatch]
 
+# 🌍 ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 env:
   CACHE_REV: "v100"
   OSXCROSS_ROOT: /home/runner/osxcross
@@ -42,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           
-          # ИСПРАВЛЕНО: Каждый пакет на новой строке с \ переносом
+          # Каждый пакет на новой строке с \ переносом
           sudo apt-get install -y \
             libxml2-dev \
             uuid-dev \
@@ -81,7 +82,7 @@ jobs:
             osxcross-${{ env.CACHE_REV }}-
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 3Б: Собираем osxcross
+      # ШАГ 3Б: Собираем osxcross (если кэша нет)
       # ════════════════════════════════════════════════════════════════════════
       - name: 🏗️ Setup Osxcross
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
@@ -129,21 +130,26 @@ jobs:
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 4: Настраиваем переменные окружения
+      # ШАГ 4: Настраиваем переменные окружения для компилятора
       # ════════════════════════════════════════════════════════════════════════
       - name: ⚙️ Setup Toolchain Environment
         run: |
+          # Путь к macOS SDK (операционная система для компиляции)
           export OSXCROSS_SDK=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX10.15.sdk
           echo "OSXCROSS_SDK=$OSXCROSS_SDK" >> $GITHUB_ENV
           
+          # Проверяем что SDK существует
           if [ ! -d "$OSXCROSS_SDK" ]; then
             echo "❌ SDK не найден в $OSXCROSS_SDK"
-            echo "📂 Доступные SDK:"
+            echo "📂 Ищем какие SDK доступны:"
             find ${{ env.OSXCROSS_TARGET_DIR }} -name "*.sdk" -type d 2>/dev/null | head -10
             exit 1
           fi
           
+          # Добавляем компилятор в PATH
           echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
+          
+          # Экспортируем переменные для следующих шагов
           echo "OSXCROSS_CONF=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" >> $GITHUB_ENV
           echo "CC=${{ env.OSXCROSS_HOST }}-clang" >> $GITHUB_ENV
           echo "CXX=${{ env.OSXCROSS_HOST }}-clang++" >> $GITHUB_ENV
@@ -153,26 +159,30 @@ jobs:
           echo "STRIP=${{ env.OSXCROSS_HOST }}-strip" >> $GITHUB_ENV
           
           echo "✅ Toolchain готов"
-          ${{ env.OSXCROSS_HOST }}-clang --version || echo "⚠️ Компилятор не доступен"
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 5: Собираем все библиотеки
+      # ШАГ 5: Собираем все необходимые библиотеки
       # ════════════════════════════════════════════════════════════════════════
       - name: 📚 Build All Static Libraries
         run: |
-          echo "═══════════════════════════════════════════════════════════"
-          echo "       🔨 НАЧИНАЕМ СБОРКУ ВСЕХ БИБЛИОТЕК 🔨"
-          echo "═══════════════════════════════════════════════════════════"
+          echo ""
+          echo "╔═════════════════════════════════════════════════════════════╗"
+          echo "║         🔨 НАЧИНАЕМ СБОРКУ ВСЕХ БИБЛИОТЕК 🔨              ║"
+          echo "╚═════════════════════════════════════════════════════════════╝"
+          echo ""
           
           mkdir -p ${{ env.INSTALL_DIR }}/lib/pkgconfig
           mkdir -p ${{ env.INSTALL_DIR }}/include
           
           # ══════════════════════════════════════════════════════════════════
-          # 1️⃣ LIBOGG - ЗАВИСИМОСТЬ для vorbis и theora!
+          # 1️⃣ LIBOGG - БАЗОВАЯ ЗАВИСИМОСТЬ для vorbis и theora
+          # 
+          # OGG это контейнер (как ZIP архив) для аудио/видео потоков
+          # VORBIS и THEORA ��спользуют OGG контейнер для хранения
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libogg.a" ]; then
             echo ""
-            echo "📦 [1/9] Собираем LIBOGG (базовая зависимость)..."
+            echo "📦 [1/8] Собираем LIBOGG (базовая зависимость)..."
             rm -rf ogg
             git clone --depth 1 https://github.com/xiph/ogg.git ogg
             cd ogg
@@ -190,15 +200,19 @@ jobs:
             cd ..
             echo "✅ LIBOGG собран"
           else
-            echo "⏭️ [1/9] LIBOGG пропущен (уже в кэше)"
+            echo "⏭️ [1/8] LIBOGG пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 2️⃣ OPUS - кодек для сжатия звука
+          # 2️⃣ OPUS - кодек для сжатия звука (аудио)
+          #
+          # OPUS = один из лучших кодеков звука
+          # Используется в VoIP, видеоконференциях, YouTube и т.д.
+          # Очень хороший звук при малом размере файла
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo ""
-            echo "📦 [2/9] Собираем OPUS (кодек звука)..."
+            echo "📦 [2/8] Собираем OPUS (кодек звука)..."
             rm -rf opus
             git clone --depth 1 https://github.com/xiph/opus
             cd opus
@@ -216,15 +230,19 @@ jobs:
             cd ..
             echo "✅ OPUS собран"
           else
-            echo "⏭️ [2/9] OPUS пропущен (уже в кэше)"
+            echo "⏭️ [2/8] OPUS пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 3️⃣ LIBVORBIS - кодек для звука (ТЕПЕРЬ РАБОТАЕТ, есть LIBOGG!)
+          # 3️⃣ LIBVORBIS - кодек для звука (зависит от LIBOGG!)
+          #
+          # VORBIS = старый кодек звука (заменен OPUS)
+          # Но всё ещё используется во многих форматах
+          # ЗАВИСИТ от LIBOGG - поэтому собираем его ПОСЛЕ OGG
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvorbis.a" ]; then
             echo ""
-            echo "📦 [3/9] Собираем LIBVORBIS (звук OGG)..."
+            echo "📦 [3/8] Собираем LIBVORBIS (звук OGG)..."
             rm -rf vorbis
             git clone --depth 1 https://github.com/xiph/vorbis vorbis
             cd vorbis
@@ -242,15 +260,19 @@ jobs:
             cd ..
             echo "✅ LIBVORBIS собран"
           else
-            echo "⏭️ [3/9] LIBVORBIS пропущен (уже в кэше)"
+            echo "⏭️ [3/8] LIBVORBIS пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 4️⃣ LIBTHEORA - видео кодек Open Source (зависит от libogg + libvorbis)
+          # 4️⃣ LIBTHEORA - видео кодек (зависит от LIBOGG + LIBVORBIS!)
+          #
+          # THEORA = открытый видео кодек (заменен на VP9 и AV1)
+          # Но всё ещё поддерживается в FFmpeg
+          # ЗАВИСИТ от LIBOGG и LIBVORBIS
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libtheora.a" ]; then
             echo ""
-            echo "📦 [4/9] Собираем LIBTHEORA (видео кодек)..."
+            echo "📦 [4/8] Собираем LIBTHEORA (видео кодек)..."
             rm -rf theora
             git clone --depth 1 https://github.com/xiph/theora theora
             cd theora
@@ -268,40 +290,31 @@ jobs:
             cd ..
             echo "✅ LIBTHEORA собран"
           else
-            echo "⏭️ [4/9] LIBTHEORA пропущен (уже в кэше)"
+            echo "⏭️ [4/8] LIBTHEORA пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 5️⃣ LIBVPX - видео кодеки VP8/VP9 от Google
+          # 5️⃣ LIBVPX - ПРОПУСКАЕМ (требует сложной настройки)
+          #
+          # LIBVPX = видео кодеки VP8/VP9 от Google
+          # Используется в WebM и YouTube
+          # НО требует специальной конфигурации для cross-compile
+          # Поэтому пропускаем - X264/X265 намного важнее
           # ══════════════════════════════════════════════════════════════════
-          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvpx.a" ]; then
-            echo ""
-            echo "📦 [5/9] Собираем LIBVPX (VP8/VP9 видео)..."
-            rm -rf libvpx
-            git clone --depth 1 https://github.com/webmproject/libvpx libvpx
-            cd libvpx
-            ./configure \
-              --target=x86_64-darwin \
-              --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static --disable-shared --disable-examples --disable-docs \
-              --as=nasm \
-              CC=${{ env.OSXCROSS_HOST }}-clang \
-              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-              > /dev/null 2>&1
-            make -j$(nproc) > /dev/null 2>&1
-            make install > /dev/null 2>&1
-            cd ..
-            echo "✅ LIBVPX собран"
-          else
-            echo "⏭️ [5/9] LIBVPX пропущен (уже в кэше)"
-          fi
+          echo ""
+          echo "⏭️ [5/8] LIBVPX пропущен (требует специальной настройки)"
           
           # ══════════════════════════════════════════════════════════════════
           # 6️⃣ LIBX264 - видео кодек H.264
+          #
+          # H.264 = ОЧЕНЬ ПОПУЛЯРНЫЙ видео кодек
+          # Используется в 90% видео контента (YouTube, Netflix, телевидение)
+          # Хороший баланс качества и размера файла
+          # Поддерживается на всех устройствах
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx264.a" ]; then
             echo ""
-            echo "📦 [6/9] Собираем LIBX264 (H.264 видео)..."
+            echo "📦 [6/8] Собираем LIBX264 (H.264 видео)..."
             rm -rf x264
             git clone --depth 1 https://github.com/mirror/x264.git x264
             cd x264
@@ -316,15 +329,20 @@ jobs:
             cd ..
             echo "✅ LIBX264 собран"
           else
-            echo "⏭️ [6/9] LIBX264 пропущен (уже в кэше)"
+            echo "⏭️ [6/8] LIBX264 пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 7️⃣ LIBX265 - видео кодек H.265/HEVC (новый)
+          # 7️⃣ LIBX265 - видео кодек H.265/HEVC (новый, лучший!)
+          #
+          # H.265 (HEVC) = НОВЫЙ видео кодек (пришёл на смену H.264)
+          # На 50% меньше размер файла ЧЕМ H.264 при ОДИНАКОВОМ качестве!
+          # Используется в 4K видео, Netflix, YouTube и т.д.
+          # Медленнее компилируется, но результат того стоит
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx265.a" ]; then
             echo ""
-            echo "📦 [7/9] Собираем LIBX265 (H.265 видео)..."
+            echo "📦 [7/8] Собираем LIBX265 (H.265 видео)..."
             rm -rf x265
             git clone --depth 1 https://github.com/videolan/x265.git x265
             cd x265/build/linux
@@ -341,15 +359,20 @@ jobs:
             cd ../../..
             echo "✅ LIBX265 собран"
           else
-            echo "⏭️ [7/9] LIBX265 пропущен (уже в кэше)"
+            echo "⏭️ [7/8] LIBX265 пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
           # 8️⃣ LIBFDK-AAC - кодек AAC для звука
+          #
+          # AAC = АУДИО кодек (Advanced Audio Codec)
+          # Используется в iTunes, iOS, Android, YouTube и т.д.
+          # Намного лучше MP3, стандарт мобильных устройств
+          # FDK = высококачественная реализация от Fraunhofer
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then
             echo ""
-            echo "📦 [8/9] Собираем LIBFDK-AAC (AAC звук)..."
+            echo "📦 [8/8] Собираем LIBFDK-AAC (AAC звук)..."
             rm -rf fdk-aac
             git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git fdk-aac
             cd fdk-aac
@@ -366,15 +389,21 @@ jobs:
             cd ..
             echo "✅ LIBFDK-AAC собран"
           else
-            echo "⏭️ [8/9] LIBFDK-AAC пропущен (уже в кэше)"
+            echo "⏭️ [8/8] LIBFDK-AAC пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 9️⃣ SVT-AV1 - новейший видео кодек
+          # 9️⃣ SVT-AV1 - СУПЕР НОВЫЙ видео кодек!
+          #
+          # AV1 = БУДУЩЕЕ видеокодирования! 🚀
+          # На 30% лучше сжатие чем H.265
+          # Разработан Google, Netflix, Amazon, Apple и другими
+          # Свободный лицензия (нет платежей за патенты)
+          # Станет стандартом в ближайшие годы
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             echo ""
-            echo "📦 [9/9] Собираем SVT-AV1 (AV1 видео)..."
+            echo "📦 [9/9] Собираем SVT-AV1 (AV1 видео - БУДУЩЕЕ!)..."
             rm -rf SVT-AV1
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
@@ -406,23 +435,22 @@ jobs:
           fi
           
           echo ""
-          echo "═══════════════════════════════════════════════���═══════════"
-          echo "       ✅ ВСЕ БИБЛИОТЕКИ УСПЕШНО СОБРАНЫ ✅"
-          echo "═══════════════════════════════════════════════════════════"
+          echo "╔═════════════════════════════════════════════════════════════╗"
+          echo "║       ✅ ВСЕ БИБЛИОТЕКИ УСПЕШНО СОБРАНЫ ✅                 ║"
+          echo "╚═════════════════════════════════════════════════════════════╝"
           echo ""
           echo "📋 Список собранных библиотек:"
           ls -lh ${{ env.INSTALL_DIR }}/lib/*.a 2>/dev/null || echo "❌ Библиотеки не найдены!"
           echo ""
 
-
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 6: Собираем FFmpeg со всеми либами
+      # ШАГ 6: Собираем FFMPEG со ВСЕМИ библиотеками
       # ════════════════════════════════════════════════════════════════════════
       - name: 🎬 Build FFmpeg with ALL Libraries
         run: |
           echo ""
           echo "╔═════════════════════════════════════════════════════════════╗"
-          echo "║         🎬 НАЧИНАЕМ СБОРКУ FFMPEG 🎬                      ║"
+          echo "║         🎬 НАЧИНАЕМ СБОРКУ FFMPEG 🎬                       ║"
           echo "╚═════════════════════════════════════════════════════════════╝"
           echo ""
           
@@ -435,14 +463,15 @@ jobs:
           
           echo "🔍 Проверяем pkg-config файлы:"
           if [ -d "${{ env.INSTALL_DIR }}/lib/pkgconfig/" ]; then
-            ls -1 ${{ env.INSTALL_DIR }}/lib/pkgconfig/ | head -5
-            echo "✅ PKG-CONFIG файлы найдены"
+            echo "✅ PKG-CONFIG файлы найдены:"
+            ls -1 ${{ env.INSTALL_DIR }}/lib/pkgconfig/ | head -10
           else
             echo "⚠️ PKG-CONFIG папка не найдена!"
           fi
           echo ""
           
           echo "⚙️ КОНФИГУРИРУЕМ FFMPEG..."
+          echo "   (процесс может занять 1-2 минуты)"
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
@@ -464,7 +493,6 @@ jobs:
             --enable-libfdk-aac \
             --enable-libx264 \
             --enable-libx265 \
-            --enable-libvpx \
             --enable-libtheora \
             --enable-libsvtav1 \
             --enable-filters \
@@ -483,7 +511,8 @@ jobs:
             2>&1 | tail -50
           
           echo ""
-          echo "🔨 КОМПИЛИРУЕМ FFMPEG (может занять 10-15 минут)..."
+          echo "🔨 КОМПИЛИРУЕМ FFMPEG"
+          echo "   (это может занять 15-30 минут - берите чай! ☕)"
           make -j$(nproc) V=1 2>&1 | tail -100
           
           echo ""
@@ -508,7 +537,7 @@ jobs:
           echo ""
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 7: Сохраняем артефакт
+      # ШАГ 7: Сохраняем артефакт (готовый FFmpeg)
       # ════════════════════════════════════════════════════════════════════════
       - name: ⬆️ Upload Final Binary
         if: success()
@@ -519,7 +548,7 @@ jobs:
           retention-days: 30
 
       # ════════════════════════════════════════════════════════════════════════
-      # ШАГ 8: Debug info при ошибке
+      # ШАГ 8: Debug информация при ошибке
       # ════════════════════════════════════════════════════════════════════════
       - name: 🔍 Debug Info
         if: failure()

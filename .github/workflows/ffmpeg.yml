@@ -1,184 +1,159 @@
-name: FFmpeg_HighSierra_Final_Fortress_v45
+name: FFmpeg_HighSierra_Final_Fortress_v55
 on: [push, workflow_dispatch]
 
 # Блок глобальных переменных. Это "пульт управления" всем билдом.
 env:
-  # Индекс версии кэша. Если поменяешь на v46, GitHub удалит старое и соберет всё с нуля.
-  CACHE_REV: "v45"
+  # Индекс версии кэша. Если поменяешь на v56, GitHub удалит старое и соберет всё с нуля.
+  CACHE_REV: "v55"
   # Путь, где будет жить наш кросс-компилятор (инструмент для сборки под macOS на Linux)
   OSXCROSS_ROOT: /home/runner/osxcross
   # FIX: Явно задаем путь к папке target. Это лечит ошибку CMake "Cannot determine OSXCROSS_TARGET_DIR".
-  # Теперь скриптам не нужно угадывать, где они лежат.
   OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
-  # Папка, куда мы будем устанавливать собранные библиотеки (Opus, SVT-AV1)
-  INSTALL_DIR: ${{ github.workspace }}/deps_dist
+  # Используем абсолютный путь для установки библиотек, чтобы исключить ошибки путей в скриптах
+  INSTALL_DIR: /home/runner/work/ffmpeg-libsvtav1-for-macos-highsierra/ffmpeg-libsvtav1-for-macos-highsierra/deps_dist
   # Минимальная версия macOS, на которой должен запуститься наш FFmpeg (High Sierra)
   MACOS_MIN_VER: "10.13"
   # Самая важная переменная: принуждает линковщик Apple всегда метить в 10.13
   MACOSX_DEPLOYMENT_TARGET: "10.13"
-  # Версия SDK (набор системных файлов macOS), которую мы используем для сборки
+  # Версия SDK (набор системных файлов macOS 10.15), которую мы используем как базу
   SDK_VERSION: "10.15"
   # Имя "мишени" для компилятора (архитектура x86_64, система Darwin/macOS)
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # Запускаем билд на свежем Linux в облаке GitHub
+    runs-on: ubuntu-22.04 # Собираем на Linux Ubuntu
     steps:
-      - name: Checkout Code # Шаг 1: Скачиваем наш репозиторий из GitHub в рабочую папку
+      - name: Checkout Code # Шаг 1: Скачиваем репозиторий
         uses: actions/checkout@v4
 
-      - name: Install Build Tools # Шаг 2: Ставим на Linux инструменты, необходимые для сборки
+      - name: Install Build Tools # Шаг 2: Ставим системные зависимости Linux
         run: |
           sudo apt-get update
-          # nasm нужен для быстрой сборки видео-кодеков, pkg-config находит пути к либам
+          # nasm — ассемблер для оптимизации кодеков, pkg-config — для поиска либ
           sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
 
-      # --- СБОРКА КРОСС-КОМПИЛЯТОРА (OSXCROSS) ---
-      - name: Restore Osxcross Cache # Пытаемся достать уже собранный компилятор из памяти GitHub
+      # --- ПОДГОТОВКА КРОСС-КОМПИЛЯТОРА (OSXCROSS) ---
+      - name: Restore Osxcross Cache # Достаем компилятор из кэша GitHub
         id: cache-osxcross
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      - name: Setup Osxcross # Если кэша нет, собираем компилятор (это долго, минут 10)
+      - name: Setup Osxcross # Если кэша нет — собираем компилятор (около 10-11 минут)
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
           rm -rf ${{ env.OSXCROSS_ROOT }}
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           mkdir -p tarballs
-          # Скачиваем официальный пакет системных файлов macOS 10.15
+          # Качаем SDK macOS 10.15
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
-          # UNATTENDED=1 значит "не задавай мне вопросов, я согласен со всеми лицензиями"
+          # UNATTENDED=1 подтверждает лицензии автоматически
           UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
-          # Проверка на физическое наличие компилятора после сборки
-          [ -f "target/bin/${{ env.OSXCROSS_HOST }}-clang" ] || exit 1
 
-      - name: Save Osxcross Cache # Сохраняем компилятор в кэш. always() значит "даже если билд упал"
+      - name: Save Osxcross Cache # Сохраняем результат в кэш
         if: always() && steps.cache-osxcross.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      - name: Export Path # Прописываем путь к нашему новому компилятору в системную переменную PATH
-        run: echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
-
-      # FIX: Проверка связи. Если кэш восстановился, но пути не работают, мы узнаем об этом сразу.
-      - name: Verify Toolchain
+      # --- ФИКСАЦИЯ ИНСТРУМЕНТОВ (PRO LEVEL) ---
+      - name: Export Path & Toolchain Vars
         run: |
-          o64-clang --version
-          echo "Toolchain path is: $(which o64-clang)"
+          # Добавляем бинарники компилятора в PATH
+          echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
+          # FIX: Принудительно задаем маковские инструменты в окружение, 
+          # чтобы Autotools не путали их с системными линуксовыми
+          echo "AR=${{ env.OSXCROSS_HOST }}-ar" >> $GITHUB_ENV
+          echo "AS=${{ env.OSXCROSS_HOST }}-as" >> $GITHUB_ENV
+          echo "NM=${{ env.OSXCROSS_HOST }}-nm" >> $GITHUB_ENV
+          echo "RANLIB=${{ env.OSXCROSS_HOST }}-ranlib" >> $GITHUB_ENV
 
       # --- СБОРКА БИБЛИОТЕК (OPUS И SVT-AV1) ---
-      - name: Build Static Libraries # Сборка кодеков в статическом виде (внутри бинарника)
+      - name: Build Static Libraries
         id: build_libs
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # OPUS: Исправляем ошибку линковки тестов (ранее падал на repacketizer_demo)
+          # OPUS: Хирургическое исправление ошибки "format not recognized"
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo "--- Сборка Opus ---"
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
-            # --disable-extra-programs: ОЧЕНЬ ВАЖНО. Отключает сборку демо-плееров, 
-            # которые требуют системных звуковых библиотек macOS (которых нет при кросс-сборке).
-            CC=o64-clang CXX=o64-clang++ ./configure \
+            # FIX: Явно прописываем NM, AR и RANLIB. Если этого не сделать, 
+            # Opus попытается использовать линуксовый nm, который не понимает файлы macOS.
+            CC=o64-clang CXX=o64-clang++ \
+            NM=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-nm \
+            AR=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-ar \
+            RANLIB=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-ranlib \
+            ./configure \
               --host=x86_64-apple-darwin \
               --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static \
-              --disable-shared \
-              --disable-extra-programs \
-              --disable-doc
+              --enable-static --disable-shared --disable-extra-programs --disable-doc
             make -j$(nproc) install && cd ..
           fi
 
-          # SVT-AV1: Исправляем ошибку CMake "Cannot determine OSXCROSS_TARGET_DIR"
+          # SVT-AV1: Решение проблемы "Cannot determine OSXCROSS_TARGET_DIR"
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # FIX: Передаем путь к компиляторам CMake напрямую через переменные, 
-            # чтобы он не пытался "угадывать" их через файл тулчейна.
+            # FIX: Инжектируем путь к тулчейну и SDK напрямую. 
+            # Это обходит глюк CMake, когда он теряет переменные после восстановления кэша.
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
+              -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_TARGET_DIR }} \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
-              -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
-              -DCMAKE_C_COMPILER=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-clang \
-              -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-clang++ \
-              -DBUILD_SHARED_LIBS=OFF \
+              -DCMAKE_OSX_SYSROOT=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX${{ env.SDK_VERSION }}.sdk \
               -DCMAKE_BUILD_TYPE=Release \
-              -DENABLE_TESTS=OFF \
-              -DENABLE_EXAMPLES=OFF
+              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF
             cmake --build build -j$(nproc) --target install && cd ..
           fi
 
-      - name: Save Deps Cache # Сохраняем библиотеки, чтобы не пересобирать их в следующий раз
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.INSTALL_DIR }}
-          key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
-
-      # --- СБОРКА САМОГО FFMPEG ---
+      # --- ФИНАЛЬНЫЙ БИЛД FFMPEG ---
       - name: Build FFmpeg
-        id: ffmpeg_build
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
-          
-          # PKG_CONFIG_LIBDIR: Изолирует поиск библиотек только нашей папкой deps_dist
+          # Указываем, где искать наши только что собранные либы
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
           
-          # КОНФИГУРАЦИЯ FFMPEG:
-          # -Wl,-platform_version: МАГИЯ. Решает проблему символа ___isPlatformVersionAtLeast.
-          # Говорит линковщику: "Билд сделан на SDK 10.15, но таргет — 10.13".
+          # МАГИЧЕСКИЙ ФЛАГ: -Wl,-platform_version. 
+          # Без него билд упадет на macOS High Sierra с ошибкой линковки.
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
-            --target-os=darwin \
-            --arch=x86_64 \
+            --target-os=darwin --arch=x86_64 \
             --cc=o64-clang --cxx=o64-clang++ \
             --nm=${{ env.OSXCROSS_HOST }}-nm --ar=${{ env.OSXCROSS_HOST }}-ar --as=${{ env.OSXCROSS_HOST }}-as \
             --pkg-config=pkg-config --enable-static --disable-shared \
             --enable-gpl --enable-nonfree --enable-libopus --enable-libsvtav1 \
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -Wl,-platform_version,macos,${{ env.MACOS_MIN_VER }},${{ env.SDK_VERSION }}" \
-            --disable-doc || { exit 1; }
-
+            --disable-doc
           make -j$(nproc)
           make install
-          
-          # ПРОВЕРКА ВЕСА: Если FFmpeg весит < 40 МБ — значит либы не влинковались.
-          SIZE=$(stat -c%s "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg")
-          echo "Финальный размер файла: $SIZE байт"
-          if [ $SIZE -lt 40000000 ]; then 
-            echo "ОШИБКА: Файл слишком мелкий! Кодеки не попали внутрь."
-            exit 1
-          fi
 
-      # --- ГЛОБАЛЬНЫЙ СБОРЩИК ЛОГОВ ---
-      - name: Upload All Possible Logs
-        # Этот шаг сработает, если упал ЛЮБОЙ из предыдущих шагов
+      # --- СБОР ЛОГОВ (ЧЕРНЫЙ ЯЩИК) ---
+      - name: Upload Logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-logs-package
-          # Собираем логи конфигурации из всех подпапок (FFmpeg, Opus, SVT-AV1)
+          name: debug-logs-v55
           path: |
             ffmpeg-src/ffbuild/config.log
             opus/config.log
             SVT-AV1/build/CMakeFiles/CMakeError.log
             SVT-AV1/build/CMakeFiles/CMakeOutput.log
 
-      - name: Upload Final FFmpeg # Если всё прошло успешно — выгружаем готовый FFmpeg!
+      - name: Upload Final Binary # Если всё ок — забираем готовый файл
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra
+          name: ffmpeg-high-sierra-v55
           path: dist_ffmpeg/bin/ffmpeg

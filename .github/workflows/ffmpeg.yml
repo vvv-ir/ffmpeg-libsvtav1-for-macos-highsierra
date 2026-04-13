@@ -66,3 +66,82 @@ jobs:
             --disable-shared || { cat config.log; exit 1; }
             
           make -j$(nproc) install
+
+      - name: Build LAME (MP3)
+        run: |
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          export CC="o64-clang"
+          export CXX="o64-clang++"
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          
+          curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
+          cd lame-3.100
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static --disable-shared
+          make -j$(nproc) install
+
+      - name: Build OPUS
+        run: |
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          export CC="o64-clang"
+          export CXX="o64-clang++"
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          
+          git clone --depth 1 https://github.com/xiph/opus
+          cd opus && ./autogen.sh
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static --disable-shared
+          make -j$(nproc) install
+
+      - name: Build SVT-AV1
+        run: |
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+          cd SVT-AV1
+          # Используем CMake-файл, который сгенерировал Osxcross
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
+            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          cmake --build build -j$(nproc) --target install
+
+      - name: Build FFmpeg (Final)
+        run: |
+          git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          
+          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          # Указываем FFmpeg, где лежат наши собранные либы
+          export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
+          
+          ./configure \
+            --prefix="${{ github.workspace }}/dist_ffmpeg" \
+            --enable-cross-compile \
+            --cross-prefix=x86_64-apple-darwin19- \
+            --target-os=darwin \
+            --arch=x86_64 \
+            --cc=o64-clang \
+            --cxx=o64-clang++ \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-nonfree \
+            --enable-libfdk-aac \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libsvtav1 \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --disable-debug \
+            --disable-doc || { cat ffbuild/config.log; exit 1; }
+
+          make -j$(nproc)
+          make install
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-high-sierra-complete
+          path: dist_ffmpeg/bin/ffmpeg

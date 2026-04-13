@@ -1,9 +1,9 @@
-name: FFmpeg_HighSierra_Final_Fortress_v70
+name: FFmpeg_HighSierra_Final_Fortress_v75
 on: [push, workflow_dispatch]
 
 # Блок глобальных переменных. Пульт управления билдом.
 env:
-  CACHE_REV: "v70"
+  CACHE_REV: "v75" # Новый индекс для сброса кэша
   OSXCROSS_ROOT: /home/runner/osxcross
   # FIX: Явный путь к таргету, нужен для CMake и PATH
   OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
@@ -12,7 +12,7 @@ env:
   MACOS_MIN_VER: "10.13"
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   SDK_VERSION: "10.15"
-  # ОСНОВНОЙ ПРЕФИКС: Именно так osxcross называет свои утилиты (кроме clang)
+  # ОСНОВНОЙ ПРЕФИКС: Это триплет нашей системы. Мы будем использовать его ВЕЗДЕ.
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
 jobs:
@@ -52,8 +52,8 @@ jobs:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      # FIX: Экспортируем PATH. GitHub Actions читает этот файл сверху вниз, 
-      # поэтому инструменты osxcross будут найдены ПЕРВЫМИ, до системных утилит Ubuntu.
+      # FIX: Экспортируем PATH. GitHub Actions читает сверху вниз. 
+      # Инструменты osxcross будут найдены ПЕРВЫМИ, до системных Linux-утилит.
       - name: Export Path
         run: echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
 
@@ -63,44 +63,49 @@ jobs:
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # OPUS: Правильное навязывание инструментов
+          # OPUS: Переход на профессиональный стандарт (Полные Триплеты)
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo "--- Сборка Opus ---"
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
-            # КРИТИЧЕСКИЙ ФИКС v70: 
-            # Для компилятора используем o64-clang (это спец. обертка osxcross).
-            # Для binutils (AR, NM, RANLIB) используем РЕАЛЬНЫЕ имена файлов с триплетом хоста.
+            
+            # КРИТИЧЕСКИЙ ФИКС v75: Мы больше не используем обертку o64-clang.
+            # Мы используем полные имена файлов (например, x86_64-apple-darwin19-clang).
+            # Это исключает "непонимание" со стороны системы сборки.
             ./configure \
               --host=${{ env.OSXCROSS_HOST }} \
               --prefix=${{ env.INSTALL_DIR }} \
               --enable-static --disable-shared --disable-extra-programs --disable-doc \
-              CC=o64-clang \
-              CXX=o64-clang++ \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CXX=${{ env.OSXCROSS_HOST }}-clang++ \
               AR=${{ env.OSXCROSS_HOST }}-ar \
               NM=${{ env.OSXCROSS_HOST }}-nm \
               RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
-              STRIP=${{ env.OSXCROSS_HOST }}-strip
-            make -j$(nproc) install && cd ..
+              STRIP=${{ env.OSXCROSS_HOST }}-strip || { echo "ОШИБКА CONFIGURE OPUS"; cat config.log; exit 1; }
+            
+            # Хук Оракула: Если make упадет, он выведет последние ошибки прямо в лог GitHub!
+            make -j$(nproc) install || { echo "ОШИБКА MAKE OPUS"; exit 1; }
+            cd ..
           fi
 
-          # SVT-AV1: Лечение CMake
+          # SVT-AV1: Усиленный CMake
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # FIX v70: toolchain.cmake внутри osxcross ожидает переменную окружения OSXCROSS_TARGET_DIR.
-            # Мы жестко экспортируем её перед вызовом cmake, а не пытаемся пропихнуть через флаг.
-            export OSXCROSS_TARGET_DIR=${{ env.OSXCROSS_TARGET_DIR }}
             
+            # FIX v75: Явно передаем архитектуру (OSX_ARCHITECTURES) и системный корень (SYSROOT).
+            # Это не дает CMake запутаться в том, какую систему он собирает.
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
-              -DCMAKE_C_COMPILER=o64-clang \
-              -DCMAKE_CXX_COMPILER=o64-clang++ \
-              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF
-            cmake --build build -j$(nproc) --target install && cd ..
+              -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+              -DCMAKE_OSX_SYSROOT=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX${{ env.SDK_VERSION }}.sdk \
+              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF || { echo "ОШИБКА CMAKE SVT-AV1"; cat build/CMakeFiles/CMakeError.log; exit 1; }
+            
+            cmake --build build -j$(nproc) --target install || { echo "ОШИБКА MAKE SVT-AV1"; exit 1; }
+            cd ..
           fi
 
       # --- СБОРКА FFMPEG ---
@@ -110,13 +115,14 @@ jobs:
           cd ffmpeg-src
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           
-          # FIX: Аналогично исправляем флаги для утилит. Убрана галлюцинация с o64-nm.
+          # FIX v75: Переводим FFmpeg на те же "полные" имена компиляторов, что и Opus.
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
             --target-os=darwin --arch=x86_64 \
-            --cc=o64-clang --cxx=o64-clang++ \
+            --cc=${{ env.OSXCROSS_HOST }}-clang \
+            --cxx=${{ env.OSXCROSS_HOST }}-clang++ \
             --nm=${{ env.OSXCROSS_HOST }}-nm \
             --ar=${{ env.OSXCROSS_HOST }}-ar \
             --as=${{ env.OSXCROSS_HOST }}-as \
@@ -125,16 +131,17 @@ jobs:
             --enable-gpl --enable-nonfree --enable-libopus --enable-libsvtav1 \
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -Wl,-platform_version,macos,${{ env.MACOS_MIN_VER }},${{ env.SDK_VERSION }}" \
-            --disable-doc
+            --disable-doc || { echo "ОШИБКА FFMPEG CONFIGURE"; tail -n 100 ffbuild/config.log; exit 1; }
+          
           make -j$(nproc)
           make install
 
-      # --- ЛОГИ ПРИ ОШИБКЕ ---
+      # --- РЕЗЕРВНАЯ ВЫГРУЗКА ЛОГОВ ---
       - name: Upload Logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-logs-v70
+          name: debug-logs-v75
           path: |
             ffmpeg-src/ffbuild/config.log
             opus/config.log
@@ -145,5 +152,5 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-v70
+          name: ffmpeg-high-sierra-v75
           path: dist_ffmpeg/bin/ffmpeg

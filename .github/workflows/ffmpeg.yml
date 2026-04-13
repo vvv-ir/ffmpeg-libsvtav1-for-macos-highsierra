@@ -1,12 +1,15 @@
-name: FFmpeg_HighSierra_Final_Fortress_v40
+name: FFmpeg_HighSierra_Final_Fortress_v45
 on: [push, workflow_dispatch]
 
 # Блок глобальных переменных. Это "пульт управления" всем билдом.
 env:
-  # Индекс версии кэша. Если поменяешь на v41, GitHub удалит старое и соберет всё с нуля.
-  CACHE_REV: "v40"
+  # Индекс версии кэша. Если поменяешь на v46, GitHub удалит старое и соберет всё с нуля.
+  CACHE_REV: "v45"
   # Путь, где будет жить наш кросс-компилятор (инструмент для сборки под macOS на Linux)
   OSXCROSS_ROOT: /home/runner/osxcross
+  # FIX: Явно задаем путь к папке target. Это лечит ошибку CMake "Cannot determine OSXCROSS_TARGET_DIR".
+  # Теперь скриптам не нужно угадывать, где они лежат.
+  OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
   # Папка, куда мы будем устанавливать собранные библиотеки (Opus, SVT-AV1)
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
   # Минимальная версия macOS, на которой должен запуститься наш FFmpeg (High Sierra)
@@ -50,7 +53,7 @@ jobs:
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
           # UNATTENDED=1 значит "не задавай мне вопросов, я согласен со всеми лицензиями"
           UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
-          # Проверяем, появился ли файл clang. Если нет - билд упадет здесь, не теряя время дальше
+          # Проверка на физическое наличие компилятора после сборки
           [ -f "target/bin/${{ env.OSXCROSS_HOST }}-clang" ] || exit 1
 
       - name: Save Osxcross Cache # Сохраняем компилятор в кэш. always() значит "даже если билд упал"
@@ -61,7 +64,13 @@ jobs:
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
       - name: Export Path # Прописываем путь к нашему новому компилятору в системную переменную PATH
-        run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
+        run: echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
+
+      # FIX: Проверка связи. Если кэш восстановился, но пути не работают, мы узнаем об этом сразу.
+      - name: Verify Toolchain
+        run: |
+          o64-clang --version
+          echo "Toolchain path is: $(which o64-clang)"
 
       # --- СБОРКА БИБЛИОТЕК (OPUS И SVT-AV1) ---
       - name: Build Static Libraries # Сборка кодеков в статическом виде (внутри бинарника)
@@ -91,15 +100,15 @@ jobs:
             echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # ПРИНУДИТЕЛЬНЫЙ ЭКСПОРТ: CMake теряет путь к osxcross, если не указать его явно в env
-            export OSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target
-            
-            # -DCMAKE_MAKE_PROGRAM: Указываем путь к make, если CMake его не нашел автоматически
+            # FIX: Передаем путь к компиляторам CMake напрямую через переменные, 
+            # чтобы он не пытался "угадывать" их через файл тулчейна.
             cmake -S . -B build \
-              -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
+              -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
               -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
+              -DCMAKE_C_COMPILER=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-clang \
+              -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-clang++ \
               -DBUILD_SHARED_LIBS=OFF \
               -DCMAKE_BUILD_TYPE=Release \
               -DENABLE_TESTS=OFF \
@@ -145,8 +154,7 @@ jobs:
           make -j$(nproc)
           make install
           
-          # ПРОВЕРКА "ЗАЩИТА ОТ ДУРАКА": 
-          # Если FFmpeg весит < 40 МБ — значит либы (SVT-AV1 весит ~30МБ) не влинковались.
+          # ПРОВЕРКА ВЕСА: Если FFmpeg весит < 40 МБ — значит либы не влинковались.
           SIZE=$(stat -c%s "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg")
           echo "Финальный размер файла: $SIZE байт"
           if [ $SIZE -lt 40000000 ]; then 
@@ -154,7 +162,7 @@ jobs:
             exit 1
           fi
 
-      # --- ГЛОБАЛЬНЫЙ СБОРЩИК ЛОГОВ (ВЫРУЧАЛОЧКА) ---
+      # --- ГЛОБАЛЬНЫЙ СБОРЩИК ЛОГОВ ---
       - name: Upload All Possible Logs
         # Этот шаг сработает, если упал ЛЮБОЙ из предыдущих шагов
         if: failure()

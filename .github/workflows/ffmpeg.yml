@@ -1,18 +1,16 @@
-name: FFmpeg_HighSierra_Final_Fortress_v75
+name: FFmpeg_HighSierra_Final_Fortress_v90
 on: [push, workflow_dispatch]
 
-# Блок глобальных переменных. Пульт управления билдом.
 env:
-  CACHE_REV: "v75" # Новый индекс для сброса кэша
+  CACHE_REV: "v90"
   OSXCROSS_ROOT: /home/runner/osxcross
-  # FIX: Явный путь к таргету, нужен для CMake и PATH
   OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
-  # Абсолютный путь для дистрибутива зависимостей
-  INSTALL_DIR: /home/runner/work/ffmpeg-libsvtav1-for-macos-highsierra/ffmpeg-libsvtav1-for-macos-highsierra/deps_dist
+  INSTALL_DIR: ${{ github.workspace }}/deps_dist
   MACOS_MIN_VER: "10.13"
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   SDK_VERSION: "10.15"
-  # ОСНОВНОЙ ПРЕФИКС: Это триплет нашей системы. Мы будем использовать его ВЕЗДЕ.
+  # Эти две переменные — «сердце» osxcross. Без них всё падает.
+  OSXCROSS_TARGET: "darwin19"
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
 jobs:
@@ -25,9 +23,8 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
+          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm yasm pkg-config make
 
-      # --- ПОДГОТОВКА OSXCROSS ---
       - name: Restore Osxcross Cache
         id: cache-osxcross
         uses: actions/cache/restore@v4
@@ -52,105 +49,62 @@ jobs:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      # FIX: Экспортируем PATH. GitHub Actions читает сверху вниз. 
-      # Инструменты osxcross будут найдены ПЕРВЫМИ, до системных Linux-утилит.
-      - name: Export Path
+      # Добавляем бинарники osxcross в PATH один раз для всех шагов
+      - name: Update PATH
         run: echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
 
-      # --- СБОРКА БИБЛИОТЕК ---
       - name: Build Static Libraries
-        id: build_libs
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # OPUS: Переход на профессиональный стандарт (Полные Триплеты)
+          # OPUS - Упрощенная конфигурация
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
-            echo "--- Сборка Opus ---"
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
-            
-            # КРИТИЧЕСКИЙ ФИКС v75: Мы больше не используем обертку o64-clang.
-            # Мы используем полные имена файлов (например, x86_64-apple-darwin19-clang).
-            # Это исключает "непонимание" со стороны системы сборки.
-            ./configure \
-              --host=${{ env.OSXCROSS_HOST }} \
-              --prefix=${{ env.INSTALL_DIR }} \
+            ./configure --host=${{ env.OSXCROSS_HOST }} --prefix=${{ env.INSTALL_DIR }} \
               --enable-static --disable-shared --disable-extra-programs --disable-doc \
-              CC=${{ env.OSXCROSS_HOST }}-clang \
-              CXX=${{ env.OSXCROSS_HOST }}-clang++ \
-              AR=${{ env.OSXCROSS_HOST }}-ar \
-              NM=${{ env.OSXCROSS_HOST }}-nm \
-              RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
-              STRIP=${{ env.OSXCROSS_HOST }}-strip || { echo "ОШИБКА CONFIGURE OPUS"; cat config.log; exit 1; }
-            
-            # Хук Оракула: Если make упадет, он выведет последние ошибки прямо в лог GitHub!
-            make -j$(nproc) install || { echo "ОШИБКА MAKE OPUS"; exit 1; }
-            cd ..
+              CC=${{ env.OSXCROSS_HOST }}-clang
+            make -j$(nproc) install && cd ..
           fi
 
-          # SVT-AV1: Усиленный CMake
+          # SVT-AV1 - Фикс через принудительный ассемблер
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
-            echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            
-            # FIX v75: Явно передаем архитектуру (OSX_ARCHITECTURES) и системный корень (SYSROOT).
-            # Это не дает CMake запутаться в том, какую систему он собирает.
+            # -DCMAKE_ASM_NASM_FLAGS форсирует macho64, игнорируя попытки CMake угадать формат
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
-              -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-              -DCMAKE_OSX_SYSROOT=${{ env.OSXCROSS_TARGET_DIR }}/SDK/MacOSX${{ env.SDK_VERSION }}.sdk \
-              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF || { echo "ОШИБКА CMAKE SVT-AV1"; cat build/CMakeFiles/CMakeError.log; exit 1; }
-            
-            cmake --build build -j$(nproc) --target install || { echo "ОШИБКА MAKE SVT-AV1"; exit 1; }
+              -DCMAKE_ASM_NASM_COMPILER=nasm \
+              -DCMAKE_ASM_NASM_FLAGS="-f macho64" \
+              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF
+            cmake --build build -j$(nproc) --target install
             cd ..
           fi
 
-      # --- СБОРКА FFMPEG ---
       - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          
-          # FIX v75: Переводим FFmpeg на те же "полные" имена компиляторов, что и Opus.
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
             --target-os=darwin --arch=x86_64 \
             --cc=${{ env.OSXCROSS_HOST }}-clang \
-            --cxx=${{ env.OSXCROSS_HOST }}-clang++ \
-            --nm=${{ env.OSXCROSS_HOST }}-nm \
-            --ar=${{ env.OSXCROSS_HOST }}-ar \
-            --as=${{ env.OSXCROSS_HOST }}-as \
-            --strip=${{ env.OSXCROSS_HOST }}-strip \
             --pkg-config=pkg-config --enable-static --disable-shared \
             --enable-gpl --enable-nonfree --enable-libopus --enable-libsvtav1 \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -Wl,-platform_version,macos,${{ env.MACOS_MIN_VER }},${{ env.SDK_VERSION }}" \
-            --disable-doc || { echo "ОШИБКА FFMPEG CONFIGURE"; tail -n 100 ffbuild/config.log; exit 1; }
-          
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
+            --disable-doc
           make -j$(nproc)
           make install
-
-      # --- РЕЗЕРВНАЯ ВЫГРУЗКА ЛОГОВ ---
-      - name: Upload Logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-logs-v75
-          path: |
-            ffmpeg-src/ffbuild/config.log
-            opus/config.log
-            SVT-AV1/build/CMakeFiles/CMakeError.log
-            SVT-AV1/build/CMakeFiles/CMakeOutput.log
 
       - name: Upload Final Binary
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-v75
+          name: ffmpeg-high-sierra-v90
           path: dist_ffmpeg/bin/ffmpeg

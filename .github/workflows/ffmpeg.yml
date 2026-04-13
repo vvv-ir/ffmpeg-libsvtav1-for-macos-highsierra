@@ -1,88 +1,96 @@
-name: FFmpeg High Sierra Ultimate
+name: FFmpeg_HighSierra_Final_Fortress
 on: [push, workflow_dispatch]
 
+# Блок глобальных переменных. Это "пульт управления" всем билдом.
 env:
-  # Индекс версии для принудительного сброса кэша (меняй, если всё сломалось)
-  CACHE_REV: "v25"
+  # Индекс версии кэша. Если поменяешь на v31, GitHub удалит старое и соберет всё с нуля.
+  CACHE_REV: "v30"
+  # Путь, где будет жить наш кросс-компилятор (инструмент для сборки под macOS на Linux)
   OSXCROSS_ROOT: /home/runner/osxcross
+  # Папка, куда мы будем устанавливать собранные библиотеки (Opus, SVT-AV1)
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
+  # Минимальная версия macOS, на которой должен запуститься наш FFmpeg (High Sierra)
   MACOS_MIN_VER: "10.13"
-  # Глобальный таргет, чтобы линковщик не откатывался к 10.9 по умолчанию
+  # Самая важная переменная: принуждает линковщик Apple всегда метить в 10.13
   MACOSX_DEPLOYMENT_TARGET: "10.13"
+  # Версия SDK (набор системных файлов macOS), которую мы используем для сборки
   SDK_VERSION: "10.15"
+  # Имя "мишени" для компилятора (архитектура x86_64, система Darwin/macOS)
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04 # Запускаем билд на свежем Linux в облаке GitHub
     steps:
-      - name: Checkout Code
+      - name: Checkout Code # Шаг 1: Скачиваем наш репозиторий из GitHub в рабочую папку
         uses: actions/checkout@v4
 
-      - name: Install System Tools
-        # Ставим зависимости для сборки либ и самого FFmpeg
+      - name: Install Build Tools # Шаг 2: Ставим на Linux инструменты, необходимые для сборки
         run: |
           sudo apt-get update
+          # nasm нужен для быстрой сборки видео-кодеков, pkg-config находит пути к либам
           sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
 
-      # --- ОСНОВНОЙ ТУЛЧЕЙН (OSXCROSS) ---
-      - name: Restore Osxcross Cache
+      # --- СБОРКА КРОСС-КОМПИЛЯТОРА (OSXCROSS) ---
+      - name: Restore Osxcross Cache # Пытаемся достать уже собранный компилятор из памяти GitHub
         id: cache-osxcross
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      - name: Setup Osxcross
+      - name: Setup Osxcross # Если кэша нет, собираем компилятор (это долго, минут 10)
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
           rm -rf ${{ env.OSXCROSS_ROOT }}
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           mkdir -p tarballs
+          # Скачиваем официальный пакет системных файлов macOS 10.15
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
+          # UNATTENDED=1 значит "не задавай мне вопросов, я согласен со всеми лицензиями"
           UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
-          # Проверка: если бинарник не создался — кэшировать нечего
+          # Проверяем, появился ли файл clang. Если нет - билд упадет здесь, не теряя время дальше
           [ -f "target/bin/${{ env.OSXCROSS_HOST }}-clang" ] || exit 1
 
-      - name: Save Osxcross Cache
-        # Сохраняем всегда, даже если билд упадет дальше, чтобы не пересобирать тулчейн
+      - name: Save Osxcross Cache # Сохраняем компилятор в кэш. always() значит "даже если билд упал"
         if: always() && steps.cache-osxcross.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      - name: Export Path
+      - name: Export Path # Прописываем путь к нашему новому компилятору в системную переменную PATH
         run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
 
-      # --- ЗАВИСИМОСТИ (DEPS) ---
-      - name: Restore Deps Cache
+      # --- СБОРКА БИБЛИОТЕК (OPUS И SVT-AV1) ---
+      - name: Restore Deps Cache # Восстанавливаем ранее собранные библиотеки (Opus, AV1)
         id: restore-deps
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.INSTALL_DIR }}
-          # Уникальный ключ по run_id предотвращает "Unable to reserve cache"
+          # Ключ включает ID запуска, чтобы GitHub не ругался на "уже существующий кэш"
           key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
           restore-keys: deps-${{ env.CACHE_REV }}-
 
-      - name: Build Libraries (Opus & SVT-AV1)
+      - name: Build Static Libraries # Сборка кодеков в статическом виде (внутри бинарника)
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # Сборка OPUS (если не в кэше)
+          # OPUS: Аудио-кодек. Проверяем, нет ли его уже в папке либ
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
+            # Указываем кросс-компилятор o64-clang и цель darwin (macOS)
             CC=o64-clang CXX=o64-clang++ ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
             make -j$(nproc) install && cd ..
           fi
 
-          # Сборка SVT-AV1
+          # SVT-AV1: Мощный видео-кодек для AV1. Используем CMake
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # CMake требует явного указания тулчейна и таргета
+            # Указываем CMake файл настроек (toolchain) из нашего osxcross
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
@@ -91,26 +99,29 @@ jobs:
             cmake --build build -j$(nproc) --target install && cd ..
           fi
 
-      - name: Save Deps Cache
+      - name: Save Deps Cache # Сохраняем библиотеки, чтобы не пересобирать их в следующий раз
         if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ env.INSTALL_DIR }}
           key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
 
-      # --- ФИНАЛЬНЫЙ СТЭК (FFMPEG) ---
+      # --- СБОРКА САМОГО FFMPEG ---
       - name: Build FFmpeg
         id: ffmpeg_build
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # Принуждаем pkg-config смотреть только в наш префикс
+          # Говорим конфигуратору искать наши либы (Opus, AV1) строго в папке deps_dist
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
           
-          # Флаги линковки:
-          # -Wl,-platform_version — решает проблему ___isPlatformVersionAtLeast (SDK 10.15 vs OS 10.13)
+          # КОНФИГУРАЦИЯ FFMPEG:
+          # --enable-cross-compile: сообщаем, что собираем для другой системы (macOS на Linux)
+          # --enable-static: вшиваем все либы внутрь одного файла ffmpeg (чтобы он работал везде сам)
+          # -Wl,-platform_version: МАГИЯ. Говорим линковщику Apple "да, SDK у нас новый (10.15),
+          # но бинарник должен прикидываться старым (10.13)". Это решает ошибку ___isPlatformVersionAtLeast.
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
@@ -135,20 +146,24 @@ jobs:
           make -j$(nproc)
           make install
           
-          # Проверка на "пустой" билд. Если < 40MB — значит либы не влинковались.
+          # ПРОВЕРКА "ЗАЩИТА ОТ ДУРАКА": 
+          # Если FFmpeg весит 14 МБ — значит либы не влинковались. 
+          # Мы ждем файл размером 50-80 МБ. Если он меньше 40 МБ — билд падает.
           SIZE=$(stat -c%s "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg")
-          echo "Binary size: $SIZE bytes"
-          if [ $SIZE -lt 40000000 ]; then echo "Error: Static libs missing in binary!"; exit 1; fi
+          echo "Финальный размер файла: $SIZE байт"
+          if [ $SIZE -lt 40000000 ]; then 
+            echo "ОШИБКА: Файл слишком мелкий! Скорее всего, кодеки не попали внутрь."
+            exit 1
+          fi
 
-      - name: Upload Config Log
-        # Выгружаем полный лог только при падении, чтобы не гадать по скриншотам
+      - name: Upload Config Log on Failure # Если FFmpeg не собрался, Гитхаб даст скачать лог ошибок
         if: failure() && steps.ffmpeg_build.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-config-log
           path: ffmpeg-src/ffbuild/config.log
 
-      - name: Upload FFmpeg
+      - name: Upload FFmpeg # Если всё прошло успешно — выгружаем готовый FFmpeg!
         if: success()
         uses: actions/upload-artifact@v4
         with:

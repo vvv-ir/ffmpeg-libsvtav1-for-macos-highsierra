@@ -1,13 +1,13 @@
-name: FFmpeg_HighSierra_Final_Fortress_v55
+name: FFmpeg_HighSierra_Final_Fortress_v60
 on: [push, workflow_dispatch]
 
 # Блок глобальных переменных. Это "пульт управления" всем билдом.
 env:
-  # Индекс версии кэша. Если поменяешь на v56, GitHub удалит старое и соберет всё с нуля.
-  CACHE_REV: "v55"
+  # Индекс версии кэша. Если поменяешь на v61, GitHub удалит старое и соберет всё с нуля.
+  CACHE_REV: "v60"
   # Путь, где будет жить наш кросс-компилятор (инструмент для сборки под macOS на Linux)
   OSXCROSS_ROOT: /home/runner/osxcross
-  # FIX: Явно задаем путь к папке target. Это лечит ошибку CMake "Cannot determine OSXCROSS_TARGET_DIR".
+  # FIX: Явно задаем путь к папке target. Это критично для работы скриптов osxcross внутри CMake.
   OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
   # Используем абсолютный путь для установки библиотек, чтобы исключить ошибки путей в скриптах
   INSTALL_DIR: /home/runner/work/ffmpeg-libsvtav1-for-macos-highsierra/ffmpeg-libsvtav1-for-macos-highsierra/deps_dist
@@ -17,7 +17,7 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   # Версия SDK (набор системных файлов macOS 10.15), которую мы используем как базу
   SDK_VERSION: "10.15"
-  # Имя "мишени" для компилятора (архитектура x86_64, система Darwin/macOS)
+  # Имя "мишени" для компилятора. Используем его как префикс для всех инструментов.
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
 jobs:
@@ -41,16 +41,14 @@ jobs:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      - name: Setup Osxcross # Если кэша нет — собираем компилятор (около 10-11 минут)
+      - name: Setup Osxcross # Если кэша нет — собираем компилятор
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
           rm -rf ${{ env.OSXCROSS_ROOT }}
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           mkdir -p tarballs
-          # Качаем SDK macOS 10.15
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
-          # UNATTENDED=1 подтверждает лицензии автоматически
           UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
 
       - name: Save Osxcross Cache # Сохраняем результат в кэш
@@ -63,14 +61,16 @@ jobs:
       # --- ФИКСАЦИЯ ИНСТРУМЕНТОВ (PRO LEVEL) ---
       - name: Export Path & Toolchain Vars
         run: |
-          # Добавляем бинарники компилятора в PATH
+          # Добавляем бинарники компилятора в PATH.
           echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
-          # FIX: Принудительно задаем маковские инструменты в окружение, 
-          # чтобы Autotools не путали их с системными линуксовыми
+          # КРИТИЧЕСКИЙ ФИКС v60: Используем полные имена инструментов с триплетом. 
+          # Это заставляет Autotools (Opus) видеть маковские бинарники вместо линуксовых.
           echo "AR=${{ env.OSXCROSS_HOST }}-ar" >> $GITHUB_ENV
           echo "AS=${{ env.OSXCROSS_HOST }}-as" >> $GITHUB_ENV
           echo "NM=${{ env.OSXCROSS_HOST }}-nm" >> $GITHUB_ENV
           echo "RANLIB=${{ env.OSXCROSS_HOST }}-ranlib" >> $GITHUB_ENV
+          echo "STRIP=${{ env.OSXCROSS_HOST }}-strip" >> $GITHUB_ENV
+          echo "LIBTOOL=${{ env.OSXCROSS_HOST }}-libtool" >> $GITHUB_ENV
 
       # --- СБОРКА БИБЛИОТЕК (OPUS И SVT-AV1) ---
       - name: Build Static Libraries
@@ -78,21 +78,18 @@ jobs:
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           
-          # OPUS: Хирургическое исправление ошибки "format not recognized"
+          # OPUS: Решение проблемы "format not recognized" (неправильный NM)
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo "--- Сборка Opus ---"
             git clone --depth 1 https://github.com/xiph/opus
             cd opus && ./autogen.sh
-            # FIX: Явно прописываем NM, AR и RANLIB. Если этого не сделать, 
-            # Opus попытается использовать линуксовый nm, который не понимает файлы macOS.
-            CC=o64-clang CXX=o64-clang++ \
-            NM=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-nm \
-            AR=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-ar \
-            RANLIB=${{ env.OSXCROSS_TARGET_DIR }}/bin/${{ env.OSXCROSS_HOST }}-ranlib \
+            # FIX v60: Передаем префикс хоста. Autoconf автоматически добавит его к именам ar, nm и т.д.
+            # Это надежнее, чем передавать каждый инструмент по отдельности.
             ./configure \
-              --host=x86_64-apple-darwin \
+              --host=${{ env.OSXCROSS_HOST }} \
               --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static --disable-shared --disable-extra-programs --disable-doc
+              --enable-static --disable-shared --disable-extra-programs --disable-doc \
+              CC=o64-clang CXX=o64-clang++
             make -j$(nproc) install && cd ..
           fi
 
@@ -101,8 +98,8 @@ jobs:
             echo "--- Сборка SVT-AV1 ---"
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # FIX: Инжектируем путь к тулчейну и SDK напрямую. 
-            # Это обходит глюк CMake, когда он теряет переменные после восстановления кэша.
+            # FIX v60: Явно передаем переменную OSXCROSS_TARGET_DIR в кэш CMake (-D).
+            # Это "затыкает" внутренний поиск в файле toolchain.cmake.
             cmake -S . -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_TARGET_DIR }} \
@@ -123,7 +120,7 @@ jobs:
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           
           # МАГИЧЕСКИЙ ФЛАГ: -Wl,-platform_version. 
-          # Без него билд упадет на macOS High Sierra с ошибкой линковки.
+          # Решает проблему символа ___isPlatformVersionAtLeast на High Sierra.
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
@@ -144,16 +141,16 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-logs-v55
+          name: debug-logs-v60
           path: |
             ffmpeg-src/ffbuild/config.log
             opus/config.log
             SVT-AV1/build/CMakeFiles/CMakeError.log
             SVT-AV1/build/CMakeFiles/CMakeOutput.log
 
-      - name: Upload Final Binary # Если всё ок — забираем готовый файл
+      - name: Upload Final Binary # Выгружаем готовый FFmpeg
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-v55
+          name: ffmpeg-high-sierra-v60
           path: dist_ffmpeg/bin/ffmpeg

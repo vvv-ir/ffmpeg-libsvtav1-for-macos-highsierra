@@ -1,9 +1,9 @@
-name: FFmpeg High Sierra Ultimate
+name: FFmpeg High Sierra Final
 on: [push, workflow_dispatch]
 
 env:
-  # Меняем версию для сброса всех старых/битых кэшей
-  CACHE_REV: "v16"
+  # Поднимаем версию кэша, чтобы гарантировать чистоту
+  CACHE_REV: "v17"
   OSXCROSS_ROOT: /home/runner/osxcross
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
   MACOS_MIN_VER: "10.13"
@@ -20,14 +20,13 @@ jobs:
       - name: Install System Tools
         run: |
           sudo apt-get update
-          # nasm обязателен для SVT-AV1 и оптимизаций FFmpeg
+          # pkg-config и nasm — критические зависимости для сборки
           sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
 
       - name: Cache Osxcross
         id: cache-osxcross
         uses: actions/cache@v4
         with:
-          # Кешируем весь корень, чтобы не пересобирать тулчейн
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
@@ -48,7 +47,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.INSTALL_DIR }}
-          # Ключ с run_id гарантирует сохранение, restore-keys гарантирует подхват последнего рабочего
+          # Используем run_id для уникальности записи, но подхватываем последние рабочие зависимости
           key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
           restore-keys: |
             deps-${{ env.CACHE_REV }}-
@@ -58,7 +57,7 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          # AR и RANLIB из Osxcross обязательны для Mach-O формата (чтобы ld не игнорировал .a файлы)
+          # Принудительно используем инструменты osxcross для корректного формата Mach-O
           CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
           ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j$(nproc) install
@@ -83,7 +82,6 @@ jobs:
 
       - name: Build SVT-AV1
         env:
-          # Пробрасываем переменные в env шага, чтобы CMake try_compile их видел
           OSXCROSS_TARGET_DIR: ${{ env.OSXCROSS_ROOT }}/target
           OSXCROSS_SDK: MacOSX${{ env.SDK_VERSION }}.sdk
           OSXCROSS_HOST: ${{ env.OSXCROSS_HOST }}
@@ -105,18 +103,23 @@ jobs:
         if: always()
         with:
           path: ${{ env.INSTALL_DIR }}
-          # Используем уникальный ключ, чтобы избежать ошибки "Unable to reserve"
           key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
 
-      - name: Build FFmpeg (Final)
+      - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # Жестко ограничиваем pkg-config нашей папкой
+          # ДИАГНОСТИКА: проверяем, что .pc файлы на месте
+          echo "Checking pkgconfig files:"
+          ls -R ${{ env.INSTALL_DIR }}/lib/pkgconfig
+          
+          # Настройка переменных для pkg-config
+          # PKG_CONFIG_LIBDIR говорит искать только в нашей папке
+          # PKG_CONFIG_SYSROOT_DIR="/" предотвращает искажение путей внутри .pc файлов
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          export PKG_CONFIG_PATH=""
-          export PKG_CONFIG_SYSROOT_DIR="/"
+          export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
+          export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
 
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
@@ -130,6 +133,7 @@ jobs:
             --ar=${{ env.OSXCROSS_HOST }}-ar \
             --as=${{ env.OSXCROSS_HOST }}-as \
             --strip=${{ env.OSXCROSS_HOST }}-strip \
+            --pkg-config=pkg-config \
             --enable-static \
             --disable-shared \
             --enable-gpl \
@@ -138,9 +142,8 @@ jobs:
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libsvtav1 \
-            --pkg-config-flags="--static" \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
             --disable-doc || { tail -n 100 ffbuild/config.log; exit 1; }
 
           make -j$(nproc)
@@ -149,5 +152,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-v16
+          name: ffmpeg-high-sierra
           path: dist_ffmpeg/bin/ffmpeg

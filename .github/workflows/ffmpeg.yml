@@ -21,12 +21,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Linux Build Tools
+      - name: Install Missing Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
-            bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
-            cmake nasm pkg-config libc++-dev libc++abi-dev python3
+          # Убираем cmake, nasm, python, llvm и прочее — они уже есть.
+          # Оставляем только специфические заголовки для сборки тулчейна.
+          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev
 
       - name: Cache Osxcross
         id: cache-osxcross
@@ -109,10 +109,10 @@ jobs:
           cd ffmpeg-src
           
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          # Ключевой момент: помогаем pkg-config найти наши .pc файлы
           export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          export PKG_CONFIG_SYSROOT_DIR="/"
-
+          
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
@@ -121,10 +121,6 @@ jobs:
             --arch=x86_64 \
             --cc=o64-clang \
             --cxx=o64-clang++ \
-            --nm=x86_64-apple-darwin19-nm \
-            --ar=x86_64-apple-darwin19-ar \
-            --as=x86_64-apple-darwin19-as \
-            --strip=x86_64-apple-darwin19-strip \
             --enable-static \
             --disable-shared \
             --enable-gpl \
@@ -134,11 +130,11 @@ jobs:
             --enable-libopus \
             --enable-libsvtav1 \
             --pkg-config-flags="--static" \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
             --disable-doc || { 
-              echo "--- CONFIG.LOG ERROR ---";
-              cat ffbuild/config.log | grep -A 20 "failed to find libfdk_aac"; 
+              echo "--- LAST 50 LINES OF CONFIG.LOG ---";
+              tail -n 50 ffbuild/config.log; 
               exit 1; 
             }
 

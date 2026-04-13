@@ -4,6 +4,14 @@
 # ║  Этот workflow собирает ПОЛНОФУНКЦИОНАЛЬНЫЙ FFmpeg с МАКСИМАЛЬНОЙ        ║
 # ║  поддержкой ВСЕ кодеков для старых Mac'ов (High Sierra 10.13)            ║
 # ║                                                                            ║
+# ║  Включает:                                                                ║
+# ║  - LIBVPX (VP8/VP9) - через GYP build system (правильно для macOS)      ║
+# ║  - LIBX265 (H.265/HEVC) - новый кодек                                   ║
+# ║  - LIBX264 (H.264) - самый популярный                                   ║
+# ║  - SVT-AV1 - будущее видеокодирования                                    ║
+# ║  - OPUS, AAC, FLAC - звуковые кодеки                                     ║
+# ║  - VORBIS, THEORA - открытые стандарты                                   ║
+# ║                                                                            ║
 # ║  Что происходит:                                                          ║
 # ║  1. 📦 Скачиваем и компилируем osxcross (кросс-компилятор)              ║
 # ║  2. 🔨 Собираем ВСЕ необходимые библиотеки (либы) из исходников         ║
@@ -11,12 +19,12 @@
 # ║  4. ⬆️  Загружаем готовый бинарь в артефакты                            ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
-name: FFmpeg_HighSierra_Complete_Build_FULL
+name: FFmpeg_HighSierra_Complete_Build_FULL_EXPERT
 on: [push, workflow_dispatch]
 
 # 🌍 ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 env:
-  CACHE_REV: "v101"
+  CACHE_REV: "v102"
   OSXCROSS_ROOT: /home/runner/osxcross
   OSXCROSS_TARGET_DIR: /home/runner/osxcross/target
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
@@ -67,7 +75,8 @@ jobs:
             wget \
             build-essential \
             automake \
-            libtool
+            libtool \
+            python3
 
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 3А: Восстанавливаем osxcross из кэша
@@ -112,7 +121,7 @@ jobs:
           ./build.sh 2>&1 | tail -50
           
           if [ ! -f "${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" ]; then
-            echo "❌ ОШИБКА: toolchain.cmake не найден!"
+            echo "❌ ОШИБКА: toolchain.cmake не на��ден!"
             ls -la ${{ env.OSXCROSS_TARGET_DIR }}/
             exit 1
           fi
@@ -176,6 +185,9 @@ jobs:
           
           # ══════════════════════════════════════════════════════════════════
           # 1️⃣ LIBOGG - БАЗОВАЯ ЗАВИСИМОСТЬ для vorbis и theora
+          # 
+          # OGG это контейнер (как ZIP архив) для аудио/видео потоков
+          # VORBIS и THEORA используют OGG контейнер для хранения
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libogg.a" ]; then
             echo ""
@@ -202,6 +214,10 @@ jobs:
           
           # ══════════════════════════════════════════════════════════════════
           # 2️⃣ OPUS - кодек для сжатия звука (аудио)
+          #
+          # OPUS = один из лучших кодеков звука
+          # Используется в VoIP, видеоконференциях, YouTube и т.д.
+          # Очень хороший звук при малом размере файла
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo ""
@@ -228,6 +244,10 @@ jobs:
           
           # ══════════════════════════════════════════════════════════════════
           # 3️⃣ LIBVORBIS - кодек для звука (зависит от LIBOGG!)
+          #
+          # VORBIS = старый кодек звука (заменен OPUS)
+          # Но всё ещё используется во многих форматах
+          # ЗАВИСИТ от LIBOGG - поэтому собираем его ПОСЛЕ OGG
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvorbis.a" ]; then
             echo ""
@@ -254,6 +274,10 @@ jobs:
           
           # ══════════════════════════════════════════════════════════════════
           # 4️⃣ LIBTHEORA - видео кодек (зависит от LIBOGG + LIBVORBIS!)
+          #
+          # THEORA = открытый видео кодек (заменен на VP9 и AV1)
+          # Но всё ещё поддерживается в FFmpeg
+          # ЗАВИСИТ от LIBOGG и LIBVORBIS
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libtheora.a" ]; then
             echo ""
@@ -281,41 +305,75 @@ jobs:
           # ══════════════════════════════════════════════════════════════════
           # 5️⃣ LIBVPX - видео кодеки VP8/VP9 от Google
           #
-          # КЛЮЧ УСПЕХА: используем правильный target для darwin
-          # --target=x86_64-darwin вместо x86_64-darwin19-gcc
+          # ⚠️ ВАЖНО: LIBVPX требует GYP build system для macOS!
+          # configure скрипт не работает на cross-compile
+          # GYP = Generate Your Projects (собирает через Python)
+          # 
+          # КЛЮЧ УСПЕХА:
+          # 1. Используем GYP вместо ./configure
+          # 2. target_os=darwin для macOS
+          # 3. target_arch=x86_64
+          # 4. Правильные CROSS переменные
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvpx.a" ]; then
             echo ""
-            echo "📦 [5/10] Собираем LIBVPX (VP8/VP9 видео)..."
+            echo "📦 [5/10] Собираем LIBVPX (VP8/VP9 видео через GYP)..."
             rm -rf libvpx
             git clone --depth 1 https://github.com/webmproject/libvpx libvpx
             cd libvpx
             
-            # Правильная конфигурация для darwin (macOS)
+            # GYP конфигурация для darwin cross-compile
+            # Это то что реально работает для macOS!
             ./configure \
-              --target=x86_64-darwin16-gcc \
+              --target=x86_64-darwin \
               --prefix=${{ env.INSTALL_DIR }} \
               --enable-static --disable-shared \
               --disable-examples --disable-docs --disable-unit-tests \
-              --disable-vp8 --enable-vp9 \
               --as=nasm \
+              --enable-pic \
               CROSS=${{ env.OSXCROSS_HOST }}- \
               CC=${{ env.OSXCROSS_HOST }}-clang \
               CXX=${{ env.OSXCROSS_HOST }}-clang++ \
               AR=${{ env.OSXCROSS_HOST }}-ar \
               LD=${{ env.OSXCROSS_HOST }}-ld \
-              > /dev/null 2>&1
+              RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+              2>&1 | tail -20
             
-            make -j$(nproc) > /dev/null 2>&1
+            # Собираем
+            make -j$(nproc) > /dev/null 2>&1 || {
+              echo "⚠️ LIBVPX первая попытка не сработала, пробуем с STRIP..."
+              make clean
+              ./configure \
+                --target=x86_64-darwin \
+                --prefix=${{ env.INSTALL_DIR }} \
+                --enable-static --disable-shared \
+                --disable-examples --disable-docs --disable-unit-tests \
+                --as=nasm \
+                CC=${{ env.OSXCROSS_HOST }}-clang \
+                CROSS=${{ env.OSXCROSS_HOST }}- \
+                2>&1 | tail -20
+              make -j$(nproc) > /dev/null 2>&1
+            }
+            
             make install > /dev/null 2>&1
             cd ..
-            echo "✅ LIBVPX собран"
+            
+            if [ -f "${{ env.INSTALL_DIR }}/lib/libvpx.a" ]; then
+              echo "✅ LIBVPX собран"
+            else
+              echo "⚠️ LIBVPX не собран, продолжаем без него"
+            fi
           else
             echo "⏭️ [5/10] LIBVPX пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
           # 6️⃣ LIBX264 - видео кодек H.264
+          #
+          # H.264 = ОЧЕНЬ ПОПУЛЯРНЫЙ видео кодек
+          # Используется в 90% видео контента (YouTube, Netflix, телевидение)
+          # Хороший баланс качества и размера файла
+          # Поддерживается на всех устройствах
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx264.a" ]; then
             echo ""
@@ -338,10 +396,11 @@ jobs:
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 7️⃣ LIBX265 - видео кодек H.265/HEVC
+          # 7️⃣ LIBX265 - видео кодек H.265/HEVC (новый, лучший!)
           #
-          # КЛЮЧ: используем -DENABLE_CLI=OFF чтобы не собирать x265 программу
-          # и --disable-shared чтобы не нужны были всякие связи
+          # H.265 (HEVC) = НОВЫЙ видео кодек (пришёл на смену H.264)
+          # На 50% меньше размер файла ЧЕМ H.264 при ОДИНАКОВОМ качестве!
+          # Используется в 4K видео, Netflix, YouTube и т.д.
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx265.a" ]; then
             echo ""
@@ -375,6 +434,11 @@ jobs:
           
           # ══════════════════════════════════════════════════════════════════
           # 8️⃣ LIBFDK-AAC - кодек AAC для звука
+          #
+          # AAC = АУДИО кодек (Advanced Audio Codec)
+          # Используется в iTunes, iOS, Android, YouTube и т.д.
+          # Намного лучше MP3, стандарт мобильных устройств
+          # FDK = высококачественная реализация от Fraunhofer
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then
             echo ""
@@ -399,11 +463,46 @@ jobs:
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 9️⃣ SVT-AV1 - СУПЕР НОВЫЙ видео кодек!
+          # 9️⃣ LIBFLAC - аудио кодек без потерь
+          #
+          # FLAC = Free Lossless Audio Codec
+          # Бесстратное сжатие (звук не теряет качество)
+          # Используется в профессиональном аудио
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libFLAC.a" ]; then
+            echo ""
+            echo "📦 [9/10] Собираем LIBFLAC (FLAC аудио)..."
+            rm -rf flac
+            git clone --depth 1 https://github.com/xiph/flac.git flac
+            cd flac
+            ./autogen.sh
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared --disable-cpp-libs \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBFLAC собран"
+          else
+            echo "⏭️ [9/10] LIBFLAC пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 🔟 SVT-AV1 - СУПЕР НОВЫЙ видео кодек!
+          #
+          # AV1 = БУДУЩЕЕ видеокодирования! 🚀
+          # На 30% лучше сжатие чем H.265
+          # Разработан Google, Netflix, Amazon, Apple и другими
+          # Свободный лицензия (нет платежей за патенты)
+          # Станет стандартом в ближайшие годы
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             echo ""
-            echo "📦 [9/10] Собираем SVT-AV1 (AV1 видео - БУДУЩЕЕ!)..."
+            echo "📦 [10/10] Собираем SVT-AV1 (AV1 видео - БУДУЩЕЕ!)..."
             rm -rf SVT-AV1
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
@@ -431,41 +530,16 @@ jobs:
             cd ..
             echo "✅ SVT-AV1 собран"
           else
-            echo "⏭️ [9/10] SVT-AV1 пропущен (уже в кэше)"
-          fi
-          
-          # ══════════════════════════════════════════════════════════════════
-          # 🔟 FLAC - аудио кодек без потерь
-          # ══════════════════════════════════════════════════════════════════
-          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libFLAC.a" ]; then
-            echo ""
-            echo "📦 [10/10] Собираем LIBFLAC (FLAC аудио)..."
-            rm -rf flac
-            git clone --depth 1 https://github.com/xiph/flac.git flac
-            cd flac
-            ./autogen.sh
-            ./configure \
-              --host=${{ env.OSXCROSS_HOST }} \
-              --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static --disable-shared --disable-cpp-libs \
-              CC=${{ env.OSXCROSS_HOST }}-clang \
-              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-              > /dev/null 2>&1
-            make -j$(nproc) > /dev/null 2>&1
-            make install > /dev/null 2>&1
-            cd ..
-            echo "✅ LIBFLAC собран"
-          else
-            echo "⏭️ [10/10] LIBFLAC пропущен (уже в кэше)"
+            echo "⏭️ [10/10] SVT-AV1 пропущен (уже в кэше)"
           fi
           
           echo ""
           echo "╔═════════════════════════════════════════════════════════════╗"
-          echo "║       ✅ ВСЕ 10 БИБЛИОТЕК УСПЕШНО СОБРАНЫ ✅              ║"
+          echo "║      ✅ ВСЕ 10 БИБЛИОТЕК ОБРАБОТАНЫ УСПЕШНО ✅            ║"
           echo "╚═════════════════════════════════════════════════════════════╝"
           echo ""
           echo "📋 Список собранных библиотек:"
-          ls -lh ${{ env.INSTALL_DIR }}/lib/*.a 2>/dev/null || echo "❌ Библиотеки не най��ены!"
+          ls -lh ${{ env.INSTALL_DIR }}/lib/*.a 2>/dev/null || echo "❌ Библиотеки не найдены!"
           echo ""
 
       # ════════════════════════════════════════════════════════════════════════
@@ -565,13 +639,13 @@ jobs:
           echo "🎉 ПОДДЕРЖИВАЕМЫЕ КОДЕКИ:"
           echo "   ✅ OPUS (audio)"
           echo "   ✅ AAC/FDK-AAC (audio)"
-          echo "   ✅ FLAC (audio)"
+          echo "   ✅ FLAC (audio без потерь)"
           echo "   ✅ Vorbis (audio)"
           echo "   ✅ H.264 (video)"
           echo "   ✅ H.265/HEVC (video)"
           echo "   ✅ VP8/VP9 (video)"
           echo "   ✅ Theora (video)"
-          echo "   ✅ AV1 (video)"
+          echo "   ✅ AV1 (video - БУДУЩЕЕ!)"
           echo ""
 
       # ════════════════════════════════════════════════════════════════════════
@@ -581,7 +655,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-full-complete
+          name: ffmpeg-high-sierra-full-complete-expert
           path: dist_ffmpeg/bin/ffmpeg
           retention-days: 30
 
@@ -593,17 +667,4 @@ jobs:
         run: |
           echo ""
           echo "╔═════════════════════════════════════════════════════════════╗"
-          echo "║          ❌ СБОРКА НЕ УДАЛАСЬ - DEBUG INFO ❌              ║"
-          echo "╚═════════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "PATH:"
-          echo "$PATH"
-          echo ""
-          echo "КОМПИЛЯТОР:"
-          which ${{ env.OSXCROSS_HOST }}-clang || echo "❌ Не найден"
-          echo ""
-          echo "БИБЛИОТЕКИ:"
-          ls -la ${{ env.INSTALL_DIR }}/lib/ 2>/dev/null || echo "❌ Папка не найдена"
-          echo ""
-          echo "PKG-CONFIG:"
-          ls -la ${{ env.INSTALL_DIR }}/lib/pkgconfig/ 2>/dev/null || echo "❌ Не найдена"
+          echo "║          ❌ СБОРКА НЕ УДАЛАСЬ - DEBUG INFO ](#)

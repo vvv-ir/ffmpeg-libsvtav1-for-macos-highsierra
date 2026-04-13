@@ -75,17 +75,22 @@ jobs:
           make -j$(nproc) install
 
       - name: Build SVT-AV1
+        # Выносим всё в переменные окружения шага, чтобы try_compile их наследовал
+        env:
+          OSXCROSS_TARGET_DIR: ${{ env.OSXCROSS_ROOT }}/target
+          OSXCROSS_SDK: MacOSX${{ env.SDK_VERSION }}.sdk
+          OSXCROSS_HOST: ${{ env.OSXCROSS_HOST }}
+          OSXCROSS_TARGET: ${{ env.OSXCROSS_HOST }}
         run: |
           if [ -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then exit 0; fi
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
-          # Возвращаем ВСЕ переменные обратно в команду, иначе toolchain.cmake падает
+          
+          # Проверяем наличие nasm (на всякий случай)
+          which nasm
+          
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
-            -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
-            -DOSXCROSS_TARGET=${{ env.OSXCROSS_HOST }} \
-            -DOSXCROSS_HOST=${{ env.OSXCROSS_HOST }} \
-            -DOSXCROSS_SDK=MacOSX${{ env.SDK_VERSION }}.sdk \
             -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
             -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
             -DCMAKE_ASM_NASM_COMPILER=nasm \
@@ -93,6 +98,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+            
           cmake --build build -j$(nproc) --target install
 
       - name: Save Deps Cache

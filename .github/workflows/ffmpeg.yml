@@ -105,22 +105,20 @@ jobs:
           path: ${{ env.INSTALL_DIR }}
           key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
 
-      - name: Build FFmpeg
+      - name: Build FFmpeg (Surgical Fix)
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # ДИАГНОСТИКА: проверяем, что .pc файлы на месте
-          echo "Checking pkgconfig files:"
-          ls -R ${{ env.INSTALL_DIR }}/lib/pkgconfig
+          # 1. Принудительно выставляем таргет в окружение, чтобы линковщик не прыгал на 10.9
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
           
-          # Настройка переменных для pkg-config
-          # PKG_CONFIG_LIBDIR говорит искать только в нашей папке
-          # PKG_CONFIG_SYSROOT_DIR="/" предотвращает искажение путей внутри .pc файлов
+          # 2. Настройка pkg-config
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
           export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
 
+          # 3. Configure с исправленными флагами линковки
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
@@ -142,15 +140,16 @@ jobs:
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libsvtav1 \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -Wl,-platform_version,macos,${{ env.MACOS_MIN_VER }},${{ env.MACOS_MIN_VER }}" \
             --disable-doc || { tail -n 100 ffbuild/config.log; exit 1; }
 
+          # 4. Сборка
           make -j$(nproc)
           make install
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra
+          name: ffmpeg-high-sierra-fixed
           path: dist_ffmpeg/bin/ffmpeg

@@ -26,7 +26,7 @@ jobs:
           sudo apt-get update
           # Убираем cmake, nasm, python, llvm и прочее — они уже есть.
           # Оставляем только специфические заголовки для сборки тулчейна.
-          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev
+          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm
 
       - name: Cache Osxcross
         id: cache-osxcross
@@ -91,6 +91,7 @@ jobs:
             -DOSXCROSS_SDK=${{ env.OSXCROSS_SDK }} \
             -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
             -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
+            -DCMAKE_ASM_NASM_COMPILER=nasm \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} -DCMAKE_MAKE_PROGRAM=/usr/bin/make

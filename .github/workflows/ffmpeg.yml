@@ -1,9 +1,9 @@
-name: FFmpeg High Sierra (Final Fix)
+name: FFmpeg High Sierra (Osxcross Strict Fix)
 on: [push, workflow_dispatch]
 
 env:
-  OSXCROSS_CACHE_VER: "v12"
-  DEPS_CACHE_VER: "v12"
+  OSXCROSS_CACHE_VER: "v13"
+  DEPS_CACHE_VER: "v13"
   OSXCROSS_ROOT: /home/runner/osxcross
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
   MACOS_MIN_VER: "10.13"
@@ -20,14 +20,14 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config
+          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
 
       - name: Cache Osxcross
         id: cache-osxcross
         uses: actions/cache@v4
         with:
-          path: ${{ env.OSXCROSS_ROOT }}/target
-          key: osxcross-v12-${{ env.SDK_VERSION }}
+          path: ${{ env.OSXCROSS_ROOT }}
+          key: osxcross-v13-${{ env.SDK_VERSION }}
 
       - name: Setup Osxcross
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
@@ -45,14 +45,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-${{ env.DEPS_CACHE_VER }}
+          key: deps-libs-v13
 
       - name: Build FDK-AAC
         run: |
           if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          # Принудительно задаем AR и RANLIB для macOS формата
           CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
           ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-example=no
           make -j$(nproc) install
@@ -80,10 +79,18 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then exit 0; fi
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
+          # Возвращаем ВСЕ переменные обратно в команду, иначе toolchain.cmake падает
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
-            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+            -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
+            -DOSXCROSS_TARGET=${{ env.OSXCROSS_HOST }} \
+            -DOSXCROSS_HOST=${{ env.OSXCROSS_HOST }} \
+            -DOSXCROSS_SDK=MacOSX${{ env.SDK_VERSION }}.sdk \
+            -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
+            -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
             -DCMAKE_ASM_NASM_COMPILER=nasm \
+            -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
+            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
           cmake --build build -j$(nproc) --target install
@@ -93,7 +100,7 @@ jobs:
         if: always()
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-${{ env.DEPS_CACHE_VER }}
+          key: deps-libs-v13
 
       - name: Build FFmpeg
         run: |

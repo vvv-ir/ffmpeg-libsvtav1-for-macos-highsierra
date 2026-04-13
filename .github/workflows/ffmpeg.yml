@@ -9,7 +9,7 @@ env:
   MACOS_MIN_VER: "10.13"
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   SDK_VERSION: "10.15"
-  # Эти две переменные — «сердце» osxcross. Без них всё падает.
+  # Сердце osxcross — эти переменные ОБЯЗАТЕЛЬНЫ
   OSXCROSS_TARGET: "darwin19"
   OSXCROSS_HOST: "x86_64-apple-darwin19"
 
@@ -23,25 +23,67 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm yasm pkg-config make
+          # ВАЖНО: добавил cmake для SVT-AV1 и git для клонирования
+          sudo apt-get install -y \
+            libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev \
+            nasm yasm pkg-config make cmake git \
+            curl wget build-essential automake libtool
 
+      # ============================================================
+      # КЭШИРОВАНИЕ osxcross — ИСПРАВЛЕНО
+      # Проблема: старый код не использовал save/restore правильно
+      # ============================================================
       - name: Restore Osxcross Cache
         id: cache-osxcross
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
+          restore-keys: |
+            osxcross-${{ env.CACHE_REV }}-
 
-      - name: Setup Osxcross
+      - name: Setup Osxcross (если кэш не найден)
+        # ВАЖНО: условие проверяет именно cache-hit, а не другие статусы
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
+          echo "🔨 Osxcross не в кэше, собираем..."
           rm -rf ${{ env.OSXCROSS_ROOT }}
+          mkdir -p ${{ env.OSXCROSS_ROOT }}
+          
+          # Клонируем osxcross репозиторий
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
+          
+          # Подготавливаем директорию для SDK
           mkdir -p tarballs
-          curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
-          UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
+          
+          # Загружаем SDK 10.15 (ИМЕННО этот, не другой!)
+          echo "📥 Загружаем MacOSX 10.15 SDK..."
+          if [ ! -f "tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz" ]; then
+            curl -L \
+              https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz \
+              -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz \
+              --retry 3 --retry-delay 5
+          fi
+          
+          # Компилируем osxcross с явными флагами
+          echo "🏗️  Собираем osxcross для darwin19..."
+          UNATTENDED=1 \
+          OSX_VERSION_MIN=${{ env.MACOS_MIN_VER }} \
+          OSXCROSS_TARGET=${{ env.OSXCROSS_TARGET }} \
+          CC=clang CXX=clang++ \
+          ./build.sh 2>&1 | tail -50
+          
+          # КРИТИЧНО: проверяем что toolchain.cmake создан
+          if [ ! -f "${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" ]; then
+            echo "❌ ОШИБКА: toolchain.cmake не найден!"
+            ls -la ${{ env.OSXCROSS_TARGET_DIR }}/
+            exit 1
+          fi
+          
+          echo "✅ Osxcross успешно собран"
 
+      # КРИТИЧНО: Сохраняем osxcross в кэш ПОСЛЕ успешной сборки
       - name: Save Osxcross Cache
         if: always() && steps.cache-osxcross.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -49,62 +91,206 @@ jobs:
           path: ${{ env.OSXCROSS_ROOT }}
           key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
-      # Добавляем бинарники osxcross в PATH один раз для всех шагов
-      - name: Update PATH
-        run: echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
-
-      - name: Build Static Libraries
+      # ============================================================
+      # PATH SETUP — добавляем osxcross бинарники ДЛЯ ВСЕХ ШАГов
+      # ============================================================
+      - name: Setup Toolchain Environment
         run: |
-          mkdir -p ${{ env.INSTALL_DIR }}
+          # Добавляем osxcross/bin в PATH
+          echo "${{ env.OSXCROSS_TARGET_DIR }}/bin" >> $GITHUB_PATH
           
-          # OPUS - Упрощенная конфигурация
+          # Экспортируем переменные для всех последующих шагов
+          echo "OSXCROSS_CONF=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake" >> $GITHUB_ENV
+          echo "CC=${{ env.OSXCROSS_HOST }}-clang" >> $GITHUB_ENV
+          echo "CXX=${{ env.OSXCROSS_HOST }}-clang++" >> $GITHUB_ENV
+          echo "LD=${{ env.OSXCROSS_HOST }}-ld" >> $GITHUB_ENV
+          echo "AR=${{ env.OSXCROSS_HOST }}-ar" >> $GITHUB_ENV
+          echo "RANLIB=${{ env.OSXCROSS_HOST }}-ranlib" >> $GITHUB_ENV
+          echo "STRIP=${{ env.OSXCROSS_HOST }}-strip" >> $GITHUB_ENV
+          
+          # Показываем версию компилятора для отладки
+          ${{ env.OSXCROSS_HOST }}-clang --version || echo "Компилятор недоступен"
+
+      # ============================================================
+      # СБОРКА STATIC LIBS — ИСПРАВЛЕНО И ОПТИМИЗИРОВАНО
+      # ============================================================
+      - name: Build Static Libraries (Opus + SVT-AV1)
+        run: |
+          mkdir -p ${{ env.INSTALL_DIR }}/lib/pkgconfig
+          
+          # ==========================================
+          # OPUS — Проверяем наличие в кэше зависов
+          # ==========================================
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
+            echo "📦 Собираем Opus..."
+            
+            # Чистим старые исходники
+            rm -rf opus
             git clone --depth 1 https://github.com/xiph/opus
-            cd opus && ./autogen.sh
-            ./configure --host=${{ env.OSXCROSS_HOST }} --prefix=${{ env.INSTALL_DIR }} \
-              --enable-static --disable-shared --disable-extra-programs --disable-doc \
-              CC=${{ env.OSXCROSS_HOST }}-clang
-            make -j$(nproc) install && cd ..
+            cd opus
+            
+            # Важно: ./autogen.sh генерирует configure
+            ./autogen.sh
+            
+            # Конфигурируем с правильными флагами для cross-compile
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static \
+              --disable-shared \
+              --disable-extra-programs \
+              --disable-doc \
+              --disable-hardening \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              LDFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
+            
+            make -j$(nproc)
+            make install
+            cd ..
+            
+            echo "✅ Opus собран успешно"
+          else
+            echo "⏭️  Opus уже в кэше, пропускаем"
           fi
 
-          # SVT-AV1 - Фикс через принудительный ассемблер
+          # ==========================================
+          # SVT-AV1 — CMAKE + NASM FIX
+          # ==========================================
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
+            echo "📦 Собираем SVT-AV1..."
+            
+            # Чистим старые исходники
+            rm -rf SVT-AV1
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
-            # -DCMAKE_ASM_NASM_FLAGS форсирует macho64, игнорируя попытки CMake угадать формат
-            cmake -S . -B build \
+            
+            # КРИТИЧНО: Создаём build директорию чистой
+            rm -rf build
+            mkdir -p build
+            
+            # CMAKE конфигурация для macOS cross-compile
+            # -DCMAKE_ASM_NASM_FLAGS="-f macho64" — КЛЮЧЕВОЙ флаг для архитектуры!
+            cmake \
+              -S . \
+              -B build \
               -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_TARGET_DIR }}/toolchain.cmake \
               -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+              -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64 \
               -DCMAKE_ASM_NASM_COMPILER=nasm \
-              -DCMAKE_ASM_NASM_FLAGS="-f macho64" \
-              -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF
+              -DCMAKE_ASM_NASM_FLAGS="-f macho64 -DPREFIX" \
+              -DCMAKE_C_FLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              -DCMAKE_CXX_FLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DENABLE_TESTS=OFF \
+              -DENABLE_EXAMPLES=OFF \
+              -DENABLE_AVX512=OFF \
+              2>&1 | head -100
+            
+            # Собираем и устанавливаем
             cmake --build build -j$(nproc) --target install
+            
+            # Проверяем результат
+            if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
+              echo "❌ ОШИБКА: libSvtAv1Enc.a не создан!"
+              ls -la ${{ env.INSTALL_DIR }}/lib/ || echo "Lib dir пуст"
+              exit 1
+            fi
+            
             cd ..
+            echo "✅ SVT-AV1 собран успешно"
+          else
+            echo "⏭️  SVT-AV1 уже в кэше, пропускаем"
           fi
+          
+          # Показываем собранные либы
+          echo "📋 Собранные статические библиотеки:"
+          ls -lh ${{ env.INSTALL_DIR }}/lib/*.a || echo "Нет .a файлов!"
 
-      - name: Build FFmpeg
+      # ============================================================
+      # СБОРКА FFmpeg — ФИНАЛЬНЫЙ ШАГ
+      # ============================================================
+      - name: Build FFmpeg with Static Libs
         run: |
+          echo "🎬 Начинаем сборку FFmpeg..."
+          
+          # Чистим и клонируем FFmpeg
+          rm -rf ffmpeg-src
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
+          
+          # КРИТИЧНО: Устанавливаем переменные для pkg-config
+          export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
+          
+          # Проверяем что .pc файлы есть
+          ls -la ${{ env.INSTALL_DIR }}/lib/pkgconfig/ || echo "⚠️  .pc files not found!"
+          
+          # Конфигурируем FFmpeg для macOS 10.13 через osxcross
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
             --cross-prefix=${{ env.OSXCROSS_HOST }}- \
-            --target-os=darwin --arch=x86_64 \
+            --target-os=darwin \
+            --arch=x86_64 \
             --cc=${{ env.OSXCROSS_HOST }}-clang \
-            --pkg-config=pkg-config --enable-static --disable-shared \
-            --enable-gpl --enable-nonfree --enable-libopus --enable-libsvtav1 \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
-            --disable-doc
-          make -j$(nproc)
+            --cxx=${{ env.OSXCROSS_HOST }}-clang++ \
+            --ar=${{ env.OSXCROSS_HOST }}-ar \
+            --ranlib=${{ env.OSXCROSS_HOST }}-ranlib \
+            --strip=${{ env.OSXCROSS_HOST }}-strip \
+            --pkg-config=pkg-config \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-nonfree \
+            --enable-libopus \
+            --enable-libsvtav1 \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --disable-doc \
+            --disable-programs \
+            --enable-ffmpeg \
+            2>&1 | tail -50
+          
+          # Собираем с максимальным параллелизмом
+          make -j$(nproc) V=1 2>&1 | tail -100
           make install
+          
+          # Проверяем что FFmpeg собран
+          if [ ! -f "${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg" ]; then
+            echo "❌ ОШИБКА: ffmpeg бинарь не создан!"
+            exit 1
+          fi
+          
+          # Показываем информацию о бинаре
+          echo "✅ FFmpeg успешно собран!"
+          file ${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg
+          ls -lh ${{ github.workspace }}/dist_ffmpeg/bin/ffmpeg
 
+      # ============================================================
+      # АРТЕФАКТЫ
+      # ============================================================
       - name: Upload Final Binary
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-high-sierra-v90
           path: dist_ffmpeg/bin/ffmpeg
+          retention-days: 30
+
+      # В случае ошибки — сохраняем логи для отладки
+      - name: Collect Debug Info on Failure
+        if: failure()
+        run: |
+          echo "❌ Сборка провалилась. Собираем информацию..."
+          echo "=== PATH ==="
+          echo $PATH
+          echo "=== Компилятор ==="
+          which x86_64-apple-darwin19-clang || echo "Компилятор не найден"
+          x86_64-apple-darwin19-clang --version 2>&1 || echo "Версия не получена"
+          echo "=== Libs ==="
+          ls -la ${{ env.INSTALL_DIR }}/lib/ || echo "Libs not found"
+          echo "=== PKG CONFIG ==="
+          pkg-config --list-all 2>&1 || echo "pkg-config error"

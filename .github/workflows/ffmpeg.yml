@@ -1,9 +1,9 @@
-name: FFmpeg High Sierra (Osxcross Strict Fix)
+name: FFmpeg High Sierra Ultimate
 on: [push, workflow_dispatch]
 
 env:
-  OSXCROSS_CACHE_VER: "v13"
-  DEPS_CACHE_VER: "v13"
+  # Меняем версию для сброса всех старых/битых кэшей
+  CACHE_REV: "v16"
   OSXCROSS_ROOT: /home/runner/osxcross
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
   MACOS_MIN_VER: "10.13"
@@ -17,21 +17,24 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Tools
+      - name: Install System Tools
         run: |
           sudo apt-get update
+          # nasm обязателен для SVT-AV1 и оптимизаций FFmpeg
           sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config make
 
       - name: Cache Osxcross
         id: cache-osxcross
         uses: actions/cache@v4
         with:
+          # Кешируем весь корень, чтобы не пересобирать тулчейн
           path: ${{ env.OSXCROSS_ROOT }}
-          key: osxcross-v13-${{ env.SDK_VERSION }}
+          key: osxcross-${{ env.CACHE_REV }}-${{ env.SDK_VERSION }}
 
       - name: Setup Osxcross
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
+          rm -rf ${{ env.OSXCROSS_ROOT }}
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
@@ -45,15 +48,19 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-v13
+          # Ключ с run_id гарантирует сохранение, restore-keys гарантирует подхват последнего рабочего
+          key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
+          restore-keys: |
+            deps-${{ env.CACHE_REV }}-
 
       - name: Build FDK-AAC
         run: |
           if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
-          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-example=no
+          # AR и RANLIB из Osxcross обязательны для Mach-O формата (чтобы ld не игнорировал .a файлы)
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j$(nproc) install
 
       - name: Build LAME
@@ -61,7 +68,7 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libmp3lame.a" ]; then exit 0; fi
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
           ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-frontend
           make -j$(nproc) install
 
@@ -70,13 +77,13 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
-          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
-          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-extra-programs --disable-doc
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j$(nproc) install
 
       - name: Build SVT-AV1
-        # Выносим всё в переменные окружения шага, чтобы try_compile их наследовал
         env:
+          # Пробрасываем переменные в env шага, чтобы CMake try_compile их видел
           OSXCROSS_TARGET_DIR: ${{ env.OSXCROSS_ROOT }}/target
           OSXCROSS_SDK: MacOSX${{ env.SDK_VERSION }}.sdk
           OSXCROSS_HOST: ${{ env.OSXCROSS_HOST }}
@@ -85,20 +92,12 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then exit 0; fi
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
-          
-          # Проверяем наличие nasm (на всякий случай)
-          which nasm
-          
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
-            -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
-            -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
-            -DCMAKE_ASM_NASM_COMPILER=nasm \
-            -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
+            -DCMAKE_ASM_NASM_COMPILER=nasm \
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
-            
           cmake --build build -j$(nproc) --target install
 
       - name: Save Deps Cache
@@ -106,27 +105,49 @@ jobs:
         if: always()
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-v13
+          # Используем уникальный ключ, чтобы избежать ошибки "Unable to reserve"
+          key: deps-${{ env.CACHE_REV }}-${{ github.run_id }}
 
-      - name: Build FFmpeg
+      - name: Build FFmpeg (Final)
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
+          
+          # Жестко ограничиваем pkg-config нашей папкой
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
+          export PKG_CONFIG_PATH=""
+          export PKG_CONFIG_SYSROOT_DIR="/"
+
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
-            --enable-cross-compile --cross-prefix=${{ env.OSXCROSS_HOST }}- \
-            --target-os=darwin --arch=x86_64 --cc=o64-clang --cxx=o64-clang++ \
-            --nm=${{ env.OSXCROSS_HOST }}-nm --ar=${{ env.OSXCROSS_HOST }}-ar \
-            --enable-static --disable-shared --enable-gpl --enable-nonfree \
-            --enable-libfdk-aac --enable-libmp3lame --enable-libopus --enable-libsvtav1 \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
-            --disable-doc
-          make -j$(nproc) install
+            --enable-cross-compile \
+            --cross-prefix=${{ env.OSXCROSS_HOST }}- \
+            --target-os=darwin \
+            --arch=x86_64 \
+            --cc=o64-clang \
+            --cxx=o64-clang++ \
+            --nm=${{ env.OSXCROSS_HOST }}-nm \
+            --ar=${{ env.OSXCROSS_HOST }}-ar \
+            --as=${{ env.OSXCROSS_HOST }}-as \
+            --strip=${{ env.OSXCROSS_HOST }}-strip \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-nonfree \
+            --enable-libfdk-aac \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libsvtav1 \
+            --pkg-config-flags="--static" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --disable-doc || { tail -n 100 ffbuild/config.log; exit 1; }
+
+          make -j$(nproc)
+          make install
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra
+          name: ffmpeg-high-sierra-v16
           path: dist_ffmpeg/bin/ffmpeg

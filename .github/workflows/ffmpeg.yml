@@ -158,7 +158,7 @@ jobs:
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 5: Собираем все библиотеки
       # ════════════════════════════════════════════════════════════════════════
-      - name: 📚 Build All Static Libraries
+            - name: 📚 Build All Static Libraries
         run: |
           echo "═══════════════════════════════════════════════════════════"
           echo "       🔨 НАЧИНАЕМ СБОРКУ ВСЕХ БИБЛИОТЕК 🔨"
@@ -168,11 +168,37 @@ jobs:
           mkdir -p ${{ env.INSTALL_DIR }}/include
           
           # ══════════════════════════════════════════════════════════════════
-          # 1️⃣ OPUS - кодек для сжатия звука
+          # 1️⃣ LIBOGG - ЗАВИСИМОСТЬ для vorbis и theora!
+          # ══════════════════════════════════════════════════════════════════
+          if [ ! -f "${{ env.INSTALL_DIR }}/lib/libogg.a" ]; then
+            echo ""
+            echo "📦 [1/9] Собираем LIBOGG (базовая зависимость)..."
+            rm -rf ogg
+            git clone --depth 1 https://github.com/xiph/ogg.git ogg
+            cd ogg
+            ./autogen.sh
+            ./configure \
+              --host=${{ env.OSXCROSS_HOST }} \
+              --prefix=${{ env.INSTALL_DIR }} \
+              --enable-static --disable-shared \
+              CC=${{ env.OSXCROSS_HOST }}-clang \
+              CFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              LDFLAGS="-mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+              > /dev/null 2>&1
+            make -j$(nproc) > /dev/null 2>&1
+            make install > /dev/null 2>&1
+            cd ..
+            echo "✅ LIBOGG собран"
+          else
+            echo "⏭️ [1/9] LIBOGG пропущен (уже в кэше)"
+          fi
+          
+          # ══════════════════════════════════════════════════════════════════
+          # 2️⃣ OPUS - кодек для сжатия звука
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then
             echo ""
-            echo "📦 [1/8] Собираем OPUS (кодек звука)..."
+            echo "📦 [2/9] Собираем OPUS (кодек звука)..."
             rm -rf opus
             git clone --depth 1 https://github.com/xiph/opus
             cd opus
@@ -190,15 +216,15 @@ jobs:
             cd ..
             echo "✅ OPUS собран"
           else
-            echo "⏭️ [1/8] OPUS пропущен (уже в кэше)"
+            echo "⏭️ [2/9] OPUS пропущен (уже в кэше)"
           fi
           
-          # ═══════════════════════════════════════════��══════════════════════
-          # 2️⃣ LIBVORBIS - кодек для звука
+          # ══════════════════════════════════════════════════════════════════
+          # 3️⃣ LIBVORBIS - кодек для звука (ТЕПЕРЬ РАБОТАЕТ, есть LIBOGG!)
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvorbis.a" ]; then
             echo ""
-            echo "📦 [2/8] Собираем LIBVORBIS (звук OGG)..."
+            echo "📦 [3/9] Собираем LIBVORBIS (звук OGG)..."
             rm -rf vorbis
             git clone --depth 1 https://github.com/xiph/vorbis vorbis
             cd vorbis
@@ -216,15 +242,15 @@ jobs:
             cd ..
             echo "✅ LIBVORBIS собран"
           else
-            echo "⏭️ [2/8] LIBVORBIS пропущен (уже в кэше)"
+            echo "⏭️ [3/9] LIBVORBIS пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 3️⃣ LIBTHEORA - видео кодек Open Source
+          # 4️⃣ LIBTHEORA - видео кодек Open Source (зависит от libogg + libvorbis)
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libtheora.a" ]; then
             echo ""
-            echo "📦 [3/8] Собираем LIBTHEORA (видео кодек)..."
+            echo "📦 [4/9] Собираем LIBTHEORA (видео кодек)..."
             rm -rf theora
             git clone --depth 1 https://github.com/xiph/theora theora
             cd theora
@@ -242,15 +268,15 @@ jobs:
             cd ..
             echo "✅ LIBTHEORA собран"
           else
-            echo "⏭️ [3/8] LIBTHEORA пропущен (уже в кэше)"
+            echo "⏭️ [4/9] LIBTHEORA пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 4️⃣ LIBVPX - видео кодеки VP8/VP9 от Google
+          # 5️⃣ LIBVPX - видео кодеки VP8/VP9 от Google
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libvpx.a" ]; then
             echo ""
-            echo "📦 [4/8] Собираем LIBVPX (VP8/VP9 видео)..."
+            echo "📦 [5/9] Собираем LIBVPX (VP8/VP9 видео)..."
             rm -rf libvpx
             git clone --depth 1 https://github.com/webmproject/libvpx libvpx
             cd libvpx
@@ -267,15 +293,15 @@ jobs:
             cd ..
             echo "✅ LIBVPX собран"
           else
-            echo "⏭️ [4/8] LIBVPX пропущен (уже в кэше)"
+            echo "⏭️ [5/9] LIBVPX пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 5️⃣ LIBX264 - видео кодек H.264
+          # 6️⃣ LIBX264 - видео кодек H.264
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx264.a" ]; then
             echo ""
-            echo "📦 [5/8] Собираем LIBX264 (H.264 видео)..."
+            echo "📦 [6/9] Собираем LIBX264 (H.264 видео)..."
             rm -rf x264
             git clone --depth 1 https://github.com/mirror/x264.git x264
             cd x264
@@ -290,15 +316,15 @@ jobs:
             cd ..
             echo "✅ LIBX264 собран"
           else
-            echo "⏭️ [5/8] LIBX264 пропущен (уже в кэше)"
+            echo "⏭️ [6/9] LIBX264 пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 6️⃣ LIBX265 - видео кодек H.265/HEVC (новый)
+          # 7️⃣ LIBX265 - видео кодек H.265/HEVC (новый)
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libx265.a" ]; then
             echo ""
-            echo "📦 [6/8] Собираем LIBX265 (H.265 видео)..."
+            echo "📦 [7/9] Собираем LIBX265 (H.265 видео)..."
             rm -rf x265
             git clone --depth 1 https://github.com/videolan/x265.git x265
             cd x265/build/linux
@@ -315,15 +341,15 @@ jobs:
             cd ../../..
             echo "✅ LIBX265 собран"
           else
-            echo "⏭️ [6/8] LIBX265 пропущен (уже в кэше)"
+            echo "⏭️ [7/9] LIBX265 пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 7️⃣ LIBFDK-AAC - кодек AAC для звука
+          # 8️⃣ LIBFDK-AAC - кодек AAC для звука
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then
             echo ""
-            echo "📦 [7/8] Собираем LIBFDK-AAC (AAC звук)..."
+            echo "📦 [8/9] Собираем LIBFDK-AAC (AAC звук)..."
             rm -rf fdk-aac
             git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git fdk-aac
             cd fdk-aac
@@ -340,15 +366,15 @@ jobs:
             cd ..
             echo "✅ LIBFDK-AAC собран"
           else
-            echo "⏭️ [7/8] LIBFDK-AAC пропущен (уже в кэше)"
+            echo "⏭️ [8/9] LIBFDK-AAC пропущен (уже в кэше)"
           fi
           
           # ══════════════════════════════════════════════════════════════════
-          # 8️⃣ SVT-AV1 - новейший видео кодек
+          # 9️⃣ SVT-AV1 - новейший видео кодек
           # ══════════════════════════════════════════════════════════════════
           if [ ! -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then
             echo ""
-            echo "📦 [8/8] Собираем SVT-AV1 (AV1 видео)..."
+            echo "📦 [9/9] Собираем SVT-AV1 (AV1 видео)..."
             rm -rf SVT-AV1
             git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
             cd SVT-AV1
@@ -376,17 +402,18 @@ jobs:
             cd ..
             echo "✅ SVT-AV1 собран"
           else
-            echo "⏭️ [8/8] SVT-AV1 пропущен (уже в кэше)"
+            echo "⏭️ [9/9] SVT-AV1 пропущен (уже в кэше)"
           fi
           
           echo ""
-          echo "═══════════════════════════════════════════════════════════"
+          echo "═══════════════════════════════════════════════���═══════════"
           echo "       ✅ ВСЕ БИБЛИОТЕКИ УСПЕШНО СОБРАНЫ ✅"
           echo "═══════════════════════════════════════════════════════════"
           echo ""
           echo "📋 Список собранных библиотек:"
           ls -lh ${{ env.INSTALL_DIR }}/lib/*.a 2>/dev/null || echo "❌ Библиотеки не найдены!"
           echo ""
+
 
       # ════════════════════════════════════════════════════════════════════════
       # ШАГ 6: Собираем FFmpeg со всеми либами

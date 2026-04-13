@@ -1,18 +1,14 @@
-name: FFmpeg High Sierra (Osxcross Strict)
+name: FFmpeg High Sierra (Final Fix)
 on: [push, workflow_dispatch]
 
 env:
-  OSXCROSS_CACHE_VER: "v11"
-  DEPS_CACHE_VER: "v11"
+  OSXCROSS_CACHE_VER: "v12"
+  DEPS_CACHE_VER: "v12"
   OSXCROSS_ROOT: /home/runner/osxcross
   INSTALL_DIR: ${{ github.workspace }}/deps_dist
   MACOS_MIN_VER: "10.13"
   SDK_VERSION: "10.15"
-  # Пробрасываем эти переменные глобально для всех шагов
-  OSXCROSS_TARGET_DIR: "/home/runner/osxcross/target"
-  OSXCROSS_TARGET: "x86_64-apple-darwin19"
   OSXCROSS_HOST: "x86_64-apple-darwin19"
-  OSXCROSS_SDK: "MacOSX10.15.sdk"
 
 jobs:
   build:
@@ -21,26 +17,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Missing Dependencies
+      - name: Install Tools
         run: |
           sudo apt-get update
-          # Убираем cmake, nasm, python, llvm и прочее — они уже есть.
-          # Оставляем только специфические заголовки для сборки тулчейна.
-          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm
+          sudo apt-get install -y libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev nasm pkg-config
 
       - name: Cache Osxcross
         id: cache-osxcross
         uses: actions/cache@v4
         with:
           path: ${{ env.OSXCROSS_ROOT }}/target
-          key: osxcross-ubuntu22-sdk${{ env.SDK_VERSION }}-${{ env.OSXCROSS_CACHE_VER }}
+          key: osxcross-v12-${{ env.SDK_VERSION }}
 
       - name: Setup Osxcross
         if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
-          mkdir -p tarballs
           curl -L https://github.com/joseluisq/macosx-sdks/releases/download/${{ env.SDK_VERSION }}/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz -o tarballs/MacOSX${{ env.SDK_VERSION }}.sdk.tar.xz
           UNATTENDED=1 CC=clang CXX=clang++ ./build.sh
 
@@ -52,14 +45,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-${{ env.DEPS_CACHE_VER }}-${{ runner.os }}
+          key: deps-libs-${{ env.DEPS_CACHE_VER }}
 
       - name: Build FDK-AAC
         run: |
           if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          CC=o64-clang CXX=o64-clang++ ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-example=no
+          # Принудительно задаем AR и RANLIB для macOS формата
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-example=no
           make -j$(nproc) install
 
       - name: Build LAME
@@ -67,7 +62,8 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libmp3lame.a" ]; then exit 0; fi
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          CC=o64-clang CXX=o64-clang++ ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-frontend
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-frontend
           make -j$(nproc) install
 
       - name: Build OPUS
@@ -75,7 +71,8 @@ jobs:
           if [ -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then exit 0; fi
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
-          CC=o64-clang CXX=o64-clang++ ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-extra-programs --disable-doc
+          CC=o64-clang CXX=o64-clang++ AR=${{ env.OSXCROSS_HOST }}-ar AS=${{ env.OSXCROSS_HOST }}-as RANLIB=${{ env.OSXCROSS_HOST }}-ranlib \
+          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-extra-programs --disable-doc
           make -j$(nproc) install
 
       - name: Build SVT-AV1
@@ -85,16 +82,10 @@ jobs:
           cd SVT-AV1
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
-            -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
-            -DOSXCROSS_TARGET=${{ env.OSXCROSS_TARGET }} \
-            -DOSXCROSS_HOST=${{ env.OSXCROSS_HOST }} \
-            -DOSXCROSS_SDK=${{ env.OSXCROSS_SDK }} \
-            -DCMAKE_C_COMPILER=${{ env.OSXCROSS_HOST }}-clang \
-            -DCMAKE_CXX_COMPILER=${{ env.OSXCROSS_HOST }}-clang++ \
-            -DCMAKE_ASM_NASM_COMPILER=nasm \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
+            -DCMAKE_ASM_NASM_COMPILER=nasm \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} -DCMAKE_MAKE_PROGRAM=/usr/bin/make
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
           cmake --build build -j$(nproc) --target install
 
       - name: Save Deps Cache
@@ -102,45 +93,24 @@ jobs:
         if: always()
         with:
           path: ${{ env.INSTALL_DIR }}
-          key: deps-libs-${{ env.DEPS_CACHE_VER }}-${{ runner.os }}
+          key: deps-libs-${{ env.DEPS_CACHE_VER }}
 
-      - name: Build FFmpeg (Final)
+      - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
-          
-          export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          # Ключевой момент: помогаем pkg-config найти наши .pc файлы
-          export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
-            --enable-cross-compile \
-            --cross-prefix=${{ env.OSXCROSS_HOST }}- \
-            --target-os=darwin \
-            --arch=x86_64 \
-            --cc=o64-clang \
-            --cxx=o64-clang++ \
-            --enable-static \
-            --disable-shared \
-            --enable-gpl \
-            --enable-nonfree \
-            --enable-libfdk-aac \
-            --enable-libmp3lame \
-            --enable-libopus \
-            --enable-libsvtav1 \
-            --pkg-config-flags="--static" \
+            --enable-cross-compile --cross-prefix=${{ env.OSXCROSS_HOST }}- \
+            --target-os=darwin --arch=x86_64 --cc=o64-clang --cxx=o64-clang++ \
+            --nm=${{ env.OSXCROSS_HOST }}-nm --ar=${{ env.OSXCROSS_HOST }}-ar \
+            --enable-static --disable-shared --enable-gpl --enable-nonfree \
+            --enable-libfdk-aac --enable-libmp3lame --enable-libopus --enable-libsvtav1 \
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
-            --disable-doc || { 
-              echo "--- LAST 50 LINES OF CONFIG.LOG ---";
-              tail -n 50 ffbuild/config.log; 
-              exit 1; 
-            }
-
-          make -j$(nproc)
-          make install
+            --disable-doc
+          make -j$(nproc) install
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

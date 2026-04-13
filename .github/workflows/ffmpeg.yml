@@ -1,4 +1,4 @@
-name: FFmpeg High Sierra (The Final Fix)
+name: FFmpeg High Sierra (Osxcross + Cache)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -8,46 +8,58 @@ jobs:
       OSXCROSS_ROOT: /home/runner/osxcross
       INSTALL_DIR: /home/runner/work/dist
       MACOS_MIN_VER: "10.13"
+      SDK_VERSION: "10.13"
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Linux Dependencies
+      - name: Install Linux Build Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
             bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
             cmake nasm pkg-config
 
-      - name: Setup Osxcross (Properly)
+      # --- КЭШИРОВАНИЕ ИНСТРУМЕНТОВ ---
+      - name: Cache Osxcross Toolchain
+        id: cache-osxcross
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/osxcross/target
+          key: osxcross-sdk-10.13-v3
+
+      - name: Setup Osxcross (If not cached)
+        if: steps.cache-osxcross.outputs.cache-hit != 'true'
         run: |
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
-          
-          # Скачиваем SDK. Важно: имя должно быть строго таким!
           mkdir -p tarballs
+          # Качаем SDK напрямую в папку tarballs
           curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz -o tarballs/MacOSX10.13.sdk.tar.xz
-          
-          # ПРОВЕРКА: Если SDK нет, билд упадет здесь, а не позже
-          [ -f tarballs/MacOSX10.13.sdk.tar.xz ] || exit 1
-          
-          # Сборка. UNATTENDED=1 убирает лишние вопросы.
           UNATTENDED=1 ./build.sh
-          
-          # ПРОВЕРКА: Создался ли рабочий SDK в таргете
-          ls ${{ env.OSXCROSS_ROOT }}/target/SDK/MacOSX10.13.sdk/usr/include/stdio.h || exit 1
 
-      - name: Build Dependencies
+      # Добавляем Osxcross в PATH для всех последующих шагов
+      - name: Export Path
+        run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
+
+      # --- КЭШИРОВАНИЕ ЗАВИСИМОСТЕЙ ---
+      - name: Cache Compiled Libs
+        id: cache-libs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.INSTALL_DIR }}
+          key: ffmpeg-libs-10.13-v3
+
+      - name: Build Dependencies (If not cached)
+        if: steps.cache-libs.outputs.cache-hit != 'true'
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          
-          # Настройки для линковщика Osxcross
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
           export CC="x86_64-apple-darwin17-clang"
           export CXX="x86_64-apple-darwin17-clang++"
-          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
-          
+
           # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
@@ -75,6 +87,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX512=ON
           cmake --build build -j$(nproc) --target install && cd ..
 
+      # --- СБОРКА FFMPEG (Всегда запускается) ---
       - name: Build FFmpeg
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
@@ -103,7 +116,7 @@ jobs:
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
             --disable-debug \
-            --disable-doc
+            --disable-doc || (cat ffbuild/config.log && exit 1)
 
           make -j$(nproc)
           make install

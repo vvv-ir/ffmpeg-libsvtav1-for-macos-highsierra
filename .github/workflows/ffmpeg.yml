@@ -1,4 +1,4 @@
-name: FFmpeg High Sierra (Final Debug)
+name: FFmpeg High Sierra (Bulletproof Edition)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -6,87 +6,95 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OSXCROSS_ROOT: /home/runner/osxcross
-      INSTALL_DIR: /home/runner/work/dist
+      # Используем путь внутри воркспейса для стабильности
+      INSTALL_DIR: ${{ github.workspace }}/deps_dist
       MACOS_MIN_VER: "10.13"
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Linux Build Tools
+      - name: Install Essential Linux Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
             bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
             cmake nasm pkg-config
 
-      # --- КЭШИРОВАНИЕ ---
-      - name: Cache Osxcross Toolchain
-        id: cache-osxcross
+      # --- КЭШИРОВАНИЕ (v5 - начинаем с чистого листа) ---
+      - name: Cache Toolchain and Libs
+        id: cache-all
         uses: actions/cache@v4
         with:
-          path: /home/runner/osxcross/target
-          key: osxcross-sdk-10.13-v4 # Поменял на v4, чтобы сбросить старый плохой кэш
+          path: |
+            ${{ env.OSXCROSS_ROOT }}/target
+            ${{ env.INSTALL_DIR }}
+          key: osxcross-v5-${{ runner.os }}-10.13
 
-      - name: Setup Osxcross (If not cached)
-        if: steps.cache-osxcross.outputs.cache-hit != 'true'
+      - name: Setup Osxcross (Force SDK Recognition)
+        if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           mkdir -p tarballs
+          # Используем проверенный SDK
           curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz -o tarballs/MacOSX10.13.sdk.tar.xz
+          # Убираем проверку версии, просто строим
           UNATTENDED=1 ./build.sh
 
-      # Добавляем Osxcross в PATH для всех шагов
-      - name: Export Path
+      - name: Add to Path
         run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
 
-      # --- ПРОВЕРКА КОМПИЛЯТОРА ---
-      - name: Verify Compiler
+      - name: Hardcore Compiler Verification
         run: |
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          x86_64-apple-darwin17-clang --version
-          echo "int main() { return 0; }" > test.c
-          # Если эта строчка упадет - значит SDK не подцепился
-          x86_64-apple-darwin17-clang test.c -o test_exec || (echo "COMPILER TEST FAILED" && exit 1)
+          # Проверяем не только версию, но и способность линковаться с SDK
+          echo '#include <stdio.h>\nint main() { printf("Hello High Sierra\\n"); return 0; }' > probe.c
+          x86_64-apple-darwin17-clang probe.c -o probe -mmacosx-version-min=10.13 || {
+            echo "--- СЕРЬЕЗНАЯ ОШИБКА: Компилятор не видит SDK! ---"
+            # Выводим ошибки линковщика напрямую
+            x86_64-apple-darwin17-clang probe.c -v -o probe -mmacosx-version-min=10.13
+            exit 1
+          }
 
-      - name: Cache Compiled Libs
-        id: cache-libs
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.INSTALL_DIR }}
-          key: ffmpeg-libs-10.13-v4
-
-      - name: Build Dependencies (If not cached)
-        if: steps.cache-libs.outputs.cache-hit != 'true'
+      - name: Build Dependencies (Surgical Precision)
+        if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          
+          # Явные переменные окружения для всех под-сборок
           export CC="x86_64-apple-darwin17-clang"
           export CXX="x86_64-apple-darwin17-clang++"
-
-          # 1. FDK-AAC (с выводом лога при ошибке)
+          export AR="x86_64-apple-darwin17-ar"
+          export RANLIB="x86_64-apple-darwin17-ranlib"
+          export MACOSX_DEPLOYMENT_TARGET=10.13
+          
+          # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
-          cd fdk-aac
-          ./autogen.sh
-          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared || { cat config.log; exit 1; }
-          make -j$(nproc) install
-          cd ..
+          cd fdk-aac && ./autogen.sh
+          # Добавляем --disable-dependency-tracking для скорости и фикса ошибок путей
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static --disable-shared --disable-dependency-tracking || {
+              echo "--- FDK-AAC CONFIG FAILED. LOG BELOW: ---"
+              cat config.log
+              exit 1
+            }
+          make -j$(nproc) install && cd ..
 
           # 2. LAME
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared || { cat config.log; exit 1; }
-          make -j$(nproc) install
-          cd ..
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static --disable-shared || { cat config.log; exit 1; }
+          make -j$(nproc) install && cd ..
 
           # 3. OPUS
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
-          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared || { cat config.log; exit 1; }
-          make -j$(nproc) install
-          cd ..
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static --disable-shared || { cat config.log; exit 1; }
+          make -j$(nproc) install && cd ..
 
           # 4. SVT-AV1
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
@@ -95,16 +103,16 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX512=ON
-          cmake --build build -j$(nproc) --target install
-          cd ..
+          cmake --build build -j$(nproc) --target install && cd ..
 
-      - name: Build FFmpeg
+      - name: Build FFmpeg (The Final Stage)
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
+          
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
-          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          export MACOSX_DEPLOYMENT_TARGET=10.13
 
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
@@ -125,7 +133,11 @@ jobs:
             --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
             --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
             --disable-debug \
-            --disable-doc || { cat ffbuild/config.log; exit 1; }
+            --disable-doc || {
+              echo "--- FFMPEG CONFIG FAILED. LOG BELOW: ---"
+              cat ffbuild/config.log
+              exit 1
+            }
 
           make -j$(nproc)
           make install
@@ -133,5 +145,5 @@ jobs:
       - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra
+          name: ffmpeg-high-sierra-v5
           path: dist_ffmpeg/bin/ffmpeg

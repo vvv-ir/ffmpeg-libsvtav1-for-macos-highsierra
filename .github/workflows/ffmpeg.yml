@@ -1,4 +1,4 @@
-name: FFmpeg High Sierra (Ubuntu Osxcross Final)
+name: FFmpeg High Sierra (The Final Fix)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -6,54 +6,52 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OSXCROSS_ROOT: /home/runner/osxcross
-      SDK_VERSION: "10.13"
-      MACOS_MIN_VER: "10.13"
       INSTALL_DIR: /home/runner/work/dist
-      # Префикс для инструментов кросс-компиляции
-      CC_PREFIX: x86_64-apple-darwin17-
+      MACOS_MIN_VER: "10.13"
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Build Tools (Linux)
+      - name: Install Linux Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm-dev libxml2-dev uuid-dev libssl-dev \
             bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
-            cmake nasm pkg-config libxml2-dev
+            cmake nasm pkg-config
 
-      - name: Setup Osxcross
+      - name: Setup Osxcross (Properly)
         run: |
           git clone https://github.com/tpoechtrager/osxcross.git ${{ env.OSXCROSS_ROOT }}
           cd ${{ env.OSXCROSS_ROOT }}
           
-          # Скачиваем SDK и кладем в tarballs с эталонным именем
+          # Скачиваем SDK. Важно: имя должно быть строго таким!
           mkdir -p tarballs
           curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz -o tarballs/MacOSX10.13.sdk.tar.xz
           
-          # Запуск сборки в неинтерактивном режиме
+          # ПРОВЕРКА: Если SDK нет, билд упадет здесь, а не позже
+          [ -f tarballs/MacOSX10.13.sdk.tar.xz ] || exit 1
+          
+          # Сборка. UNATTENDED=1 убирает лишние вопросы.
           UNATTENDED=1 ./build.sh
           
-          # Добавляем бинарники в PATH для следующих шагов
-          echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
+          # ПРОВЕРКА: Создался ли рабочий SDK в таргете
+          ls ${{ env.OSXCROSS_ROOT }}/target/SDK/MacOSX10.13.sdk/usr/include/stdio.h || exit 1
 
-      - name: Build Dependencies (Static x86_64)
+      - name: Build Dependencies
         run: |
           mkdir -p ${{ env.INSTALL_DIR }}
-          # Принудительно задаем переменные окружения для кросс-компиляции
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          export CC="${{ env.CC_PREFIX }}clang"
-          export CXX="${{ env.CC_PREFIX }}clang++"
-          export AR="${{ env.CC_PREFIX }}ar"
-          export RANLIB="${{ env.CC_PREFIX }}ranlib"
-          export CFLAGS="-O3 -mmacosx-version-min=${{ env.MACOS_MIN_VER }} -I${{ env.INSTALL_DIR }}/include"
-          export LDFLAGS="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}"
-
+          
+          # Настройки для линковщика Osxcross
+          export CC="x86_64-apple-darwin17-clang"
+          export CXX="x86_64-apple-darwin17-clang++"
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+          
           # 1. FDK-AAC
           git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
-          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
+          ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared || (cat config.log && exit 1)
           make -j$(nproc) install && cd ..
 
           # 2. LAME
@@ -68,15 +66,13 @@ jobs:
           ./configure --host=x86_64-apple-darwin17 --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j$(nproc) install && cd ..
 
-          # 4. SVT-AV1 (Исправленный CMake с тулчейном)
+          # 4. SVT-AV1
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_AVX512=ON
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX512=ON
           cmake --build build -j$(nproc) --target install && cd ..
 
       - name: Build FFmpeg
@@ -84,17 +80,17 @@ jobs:
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
           cd ffmpeg-src
           
-          # Указываем FFmpeg, где лежат наши собранные библиотеки
-          export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
+          export PKG_CONFIG_LIBDIR="${{ env.INSTALL_DIR }}/lib/pkgconfig"
+          export MACOSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
 
           ./configure \
             --prefix="${{ github.workspace }}/dist_ffmpeg" \
             --enable-cross-compile \
-            --cross-prefix=${{ env.CC_PREFIX }} \
+            --cross-prefix=x86_64-apple-darwin17- \
             --target-os=darwin \
             --arch=x86_64 \
-            --cc=${{ env.CC_PREFIX }}clang \
+            --cc=x86_64-apple-darwin17-clang \
             --pkg-config=pkg-config \
             --enable-static \
             --disable-shared \
@@ -104,16 +100,16 @@ jobs:
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libsvtav1 \
-            --extra-cflags="-I${{ env.INSTALL_DIR }}/include -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
-            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib -mmacosx-version-min=${{ env.MACOS_MIN_VER }}" \
+            --extra-cflags="-I${{ env.INSTALL_DIR }}/include" \
+            --extra-ldflags="-L${{ env.INSTALL_DIR }}/lib" \
             --disable-debug \
             --disable-doc
 
           make -j$(nproc)
           make install
 
-      - name: Upload FFmpeg Binary
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-high-sierra-osxcross
+          name: ffmpeg-high-sierra
           path: dist_ffmpeg/bin/ffmpeg

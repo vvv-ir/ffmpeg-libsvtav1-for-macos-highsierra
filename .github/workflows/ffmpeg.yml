@@ -85,16 +85,21 @@ jobs:
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
+          
+          # Мы добавляем OSXCROSS_SDK и OSXCROSS_SDK_DIR, чтобы toolchain.cmake замолчал
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
             -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
             -DOSXCROSS_TARGET=x86_64-apple-darwin19 \
             -DOSXCROSS_HOST=x86_64-apple-darwin19 \
+            -DOSXCROSS_SDK=MacOSX${{ env.SDK_VERSION }}.sdk \
+            -DOSXCROSS_SDK_DIR=${{ env.OSXCROSS_ROOT }}/target/SDK/MacOSX${{ env.SDK_VERSION }}.sdk \
             -DCMAKE_C_COMPILER=x86_64-apple-darwin19-clang \
             -DCMAKE_CXX_COMPILER=x86_64-apple-darwin19-clang++ \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} -DCMAKE_MAKE_PROGRAM=/usr/bin/make
+            
           cmake --build build -j$(nproc) --target install
 
       - name: Save Deps Cache

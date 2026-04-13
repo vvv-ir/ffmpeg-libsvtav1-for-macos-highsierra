@@ -76,8 +76,17 @@ jobs:
           
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
-          ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} \
-            --enable-static --disable-shared
+          
+          # КРИТИЧНО: --disable-frontend убирает попытку собрать бинарник lame, 
+          # который и вызывает ошибку ld: symbol(s) not found
+          ./configure \
+            --host=x86_64-apple-darwin \
+            --prefix=${{ env.INSTALL_DIR }} \
+            --enable-static \
+            --disable-shared \
+            --disable-frontend \
+            --disable-gtktest
+            
           make -j$(nproc) install
 
       - name: Build OPUS

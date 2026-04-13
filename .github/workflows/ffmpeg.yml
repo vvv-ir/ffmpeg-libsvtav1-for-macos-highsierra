@@ -123,15 +123,20 @@ jobs:
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
-          # Добавлены флаги отключения тестов и примеров для SVT-AV1
+          
+          # Явно задаем хост и компиляторы для CMake, чтобы не падал toolchain.cmake
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
+            -DOSXCROSS_HOST=x86_64-apple-darwin19 \
+            -DCMAKE_C_COMPILER=x86_64-apple-darwin19-clang \
+            -DCMAKE_CXX_COMPILER=x86_64-apple-darwin19-clang++ \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTING=OFF \
             -DBUILD_APPS=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }}
+            
           cmake --build build -j$(nproc) --target install -- VERBOSE=1
 
       - name: Build FFmpeg (Final)

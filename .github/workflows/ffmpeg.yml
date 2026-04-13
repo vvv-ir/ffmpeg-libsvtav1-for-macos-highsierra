@@ -23,7 +23,6 @@ jobs:
             bash patch make tar xz-utils bzip2 gzip sed cpio libbz2-dev zlib1g-dev \
             cmake nasm pkg-config libc++-dev libc++abi-dev python3
 
-      # --- КЭШ: OSXCROSS (Стандартный, он у тебя уже работает) ---
       - name: Cache Osxcross
         id: cache-osxcross
         uses: actions/cache@v4
@@ -45,8 +44,6 @@ jobs:
       - name: Export Path
         run: echo "${{ env.OSXCROSS_ROOT }}/target/bin" >> $GITHUB_PATH
 
-      # --- МЕХАНИКА ФОРСИРОВАННОГО КЭША ДЛЯ БИБЛИОТЕК ---
-      # Мы восстанавливаем общую папку INSTALL_DIR
       - name: Restore Deps Cache
         id: restore-deps
         uses: actions/cache/restore@v4
@@ -56,17 +53,17 @@ jobs:
 
       - name: Build FDK-AAC
         run: |
-          if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then echo "FDK-AAC found in cache"; exit 0; fi
+          if [ -f "${{ env.INSTALL_DIR }}/lib/libfdk-aac.a" ]; then echo "FDK-AAC found"; exit 0; fi
           mkdir -p ${{ env.INSTALL_DIR }}
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
-          git clone --depth 1 https://github.com/mstorsio/fdk-aac
+          git clone --depth 1 https://github.com/mstorsjo/fdk-aac
           cd fdk-aac && ./autogen.sh
           ./configure --host=x86_64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-example=no
           make -j$(nproc) install
 
       - name: Build LAME
         run: |
-          if [ -f "${{ env.INSTALL_DIR }}/lib/libmp3lame.a" ]; then echo "LAME found in cache"; exit 0; fi
+          if [ -f "${{ env.INSTALL_DIR }}/lib/libmp3lame.a" ]; then echo "LAME found"; exit 0; fi
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           curl -L https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz | tar xz
           cd lame-3.100
@@ -75,7 +72,7 @@ jobs:
 
       - name: Build OPUS
         run: |
-          if [ -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then echo "OPUS found in cache"; exit 0; fi
+          if [ -f "${{ env.INSTALL_DIR }}/lib/libopus.a" ]; then echo "OPUS found"; exit 0; fi
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           git clone --depth 1 https://github.com/xiph/opus
           cd opus && ./autogen.sh
@@ -84,12 +81,10 @@ jobs:
 
       - name: Build SVT-AV1
         run: |
-          if [ -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then echo "SVT-AV1 found in cache"; exit 0; fi
+          if [ -f "${{ env.INSTALL_DIR }}/lib/libSvtAv1Enc.a" ]; then echo "SVT-AV1 found"; exit 0; fi
           export PATH="${{ env.OSXCROSS_ROOT }}/target/bin:$PATH"
           git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
           cd SVT-AV1
-          
-          # Мы передаем ВСЕ переменные, которые требует toolchain.cmake (строки 10-20)
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE=${{ env.OSXCROSS_ROOT }}/target/toolchain.cmake \
             -DOSXCROSS_TARGET_DIR=${{ env.OSXCROSS_ROOT }}/target \
@@ -98,16 +93,10 @@ jobs:
             -DCMAKE_C_COMPILER=x86_64-apple-darwin19-clang \
             -DCMAKE_CXX_COMPILER=x86_64-apple-darwin19-clang++ \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR }} \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF \
-            -DBUILD_APPS=OFF \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} \
-            -DCMAKE_MAKE_PROGRAM=/usr/bin/make
-            
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_MIN_VER }} -DCMAKE_MAKE_PROGRAM=/usr/bin/make
           cmake --build build -j$(nproc) --target install
 
-      # ФОРСИРОВАННОЕ СОХРАНЕНИЕ: сработает даже если билд упадет на следующем шаге
       - name: Save Deps Cache
         uses: actions/cache/save@v4
         if: always()
